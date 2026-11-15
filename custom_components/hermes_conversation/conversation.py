@@ -61,6 +61,7 @@ from .const import (
 )
 from .speech import SpeechEmojiFilter, SpeechMarkdownFilter, strip_speech_emoji
 from .silence import SpeechSilenceFilter, is_silence
+from .native import NativeError, TOKEN_PREFIX
 
 try:
     from homeassistant.components.conversation import ChatLog, async_get_chat_log
@@ -449,6 +450,32 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
             or user_input.conversation_id
             or str(uuid.uuid4())
         )
+        if user_input.text.startswith(TOKEN_PREFIX):
+            runtime = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+            response = intent.IntentResponse(language=user_input.language)
+            try:
+                store = runtime.get("capture_store")
+                native = runtime.get("native_client")
+                if store is None or native is None:
+                    raise NativeError("native_disabled")
+                pcm = store.take(user_input.text)
+                final = await native.exchange(pcm, conv_id)
+                text = _sanitize_text_for_speech(final.text)
+                silent = is_silence(final.text)
+                if not silent:
+                    response.async_set_speech(text)
+                return self._build_conversation_result(
+                    response, conv_id,
+                    continue_conversation=final.follow_up and not silent,
+                ), False
+            except NativeError:
+                response.async_set_error(
+                    intent.IntentResponseErrorCode.UNKNOWN,
+                    "Native audio is unavailable. Please use the text assistant.",
+                )
+                return self._build_conversation_result(
+                    response, conv_id, continue_conversation=False,
+                ), True
         follow_up_mode = self._continued_conversation_mode()
         session_reuse = self._session_reuse_enabled()
         session_key = self._build_session_key(user_input, conv_id) if session_reuse else None

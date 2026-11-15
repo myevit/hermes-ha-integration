@@ -14,6 +14,7 @@ from .api import HermesApiClient
 from .compat import entry_value, resolve_connection_config
 from .const import DEFAULT_TIMEOUT, DOMAIN, LEGACY_CONF_MODEL, LEGACY_CONF_TIMEOUT
 from .coordinator import HermesDiagnosticsCoordinator
+from .native import CaptureStore, NativeClient
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: tuple[Platform, ...] = (
@@ -54,7 +55,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "conversation_activity": conversation_activity,
     }
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    platforms = PLATFORMS
+    if entry_value(entry, "native_audio_enabled", False):
+        store = CaptureStore()
+        native = NativeClient(
+            session, entry_value(entry, "native_audio_origin", ""),
+            entry_value(entry, "native_audio_key", ""),
+            connection.profile or "default",
+        )
+        hass.data[DOMAIN][entry.entry_id].update(native_client=native, capture_store=store)
+        entry.async_on_unload(store.clear)
+        entry.async_on_unload(native.shutdown)
+        platforms = (*PLATFORMS, Platform.STT)
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     # A slow or black-holed diagnostics endpoint must not delay the conversation agent.
     entry.async_create_background_task(
@@ -70,7 +83,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    platforms = PLATFORMS
+    if "native_client" in hass.data[DOMAIN][entry.entry_id]:
+        platforms = (*PLATFORMS, Platform.STT)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)

@@ -413,6 +413,17 @@ class HermesConversationOptionsFlow(OptionsFlow):
                     current_connection.profile,
                     current_connection.profile_route,
                 )
+                if not errors and normalized_input.get("native_audio_enabled", self.config_entry.options.get("native_audio_enabled", False)):
+                    from .native import NativeClient, NativeError
+                    try:
+                        NativeClient(
+                            None,
+                            normalized_input.get("native_audio_origin", self.config_entry.options.get("native_audio_origin", "")),
+                            normalized_input.get("native_audio_key", self.config_entry.options.get("native_audio_key", "")),
+                            candidate_profile or "default",
+                        )
+                    except (NativeError, ValueError):
+                        errors["base"] = "invalid_native_configuration"
                 if not errors and connection_changed:
                     session = async_get_clientsession(self.hass)
                     client = HermesApiClient(
@@ -525,6 +536,9 @@ class HermesConversationOptionsFlow(OptionsFlow):
                         CONF_VERIFY_SSL,
                         default=connection.verify_ssl,
                     ): bool,
+                    vol.Optional("native_audio_enabled", default=entry_value(self.config_entry, "native_audio_enabled", False)): bool,
+                    vol.Optional("native_audio_origin", default=entry_value(self.config_entry, "native_audio_origin", "")): str,
+                    vol.Optional("native_audio_key", default=entry_value(self.config_entry, "native_audio_key", "")): TextSelector(TextSelectorConfig(type="password")),
                     vol.Optional(
                         CONF_PROMPT,
                         default=entry_value(

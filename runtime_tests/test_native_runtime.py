@@ -1,0 +1,55 @@
+"""Real HA STT platform and conversation boundary; no provider or device calls."""
+from unittest.mock import AsyncMock, patch
+import pytest
+from homeassistant.components import stt
+from homeassistant.helpers import entity_registry as er
+from custom_components.hermes_conversation.const import DOMAIN
+from custom_components.hermes_conversation.native import CaptureStore, NativeResult
+from custom_components.hermes_conversation.stt import HermesNativeCapture
+from runtime_tests.test_activity_runtime import _setup, _process
+
+
+async def test_real_native_setup_capture_conversation_unload(hass_ready, hermes_api):
+    hass = hass_ready
+    entry = await _setup(hass, hermes_api)
+    hass.config_entries.async_update_entry(entry, options={
+        'native_audio_enabled': True,
+        'native_audio_origin': 'https://example.org',
+        'native_audio_key': 'synthetic-test-token-not-real-' + 'x' * 40,
+    })
+    await hass.async_block_till_done(wait_background_tasks=True)
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id('stt', DOMAIN, entry.entry_id + '_native_capture')
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    capture = HermesNativeCapture(entry.entry_id, runtime['capture_store'])
+    metadata = stt.SpeechMetadata(language='en', format=stt.AudioFormats.WAV,
+        codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
+        sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
+        channel=stt.AudioChannels.CHANNEL_MONO)
+    async def stream():
+        yield b'\0\0' * 160
+    result = await capture.async_process_audio_stream(metadata, stream())
+    assert result.result == stt.SpeechResultState.SUCCESS
+    before = hermes_api.count_paths('/v1/chat/completions')
+    with patch.object(runtime['native_client'], 'exchange', AsyncMock(return_value=NativeResult('Ready?', True))) as exchange:
+        response = await _process(hass, entry, result.text)
+        assert response.continue_conversation
+        assert response.response.speech['plain']['speech'] == 'Ready?'
+        exchange.assert_awaited_once()
+        replay = await _process(hass, entry, result.text)
+        assert replay.response.as_dict()['response_type'] == 'error'
+    assert hermes_api.count_paths('/v1/chat/completions') == before
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert entry.entry_id not in hass.data.get(DOMAIN, {})
+
+
+@pytest.mark.parametrize('pcm', [b'', b'x', b'x' * (1024 * 1024 + 2)])
+async def test_real_capture_bounds(pcm):
+    capture = HermesNativeCapture('test', CaptureStore())
+    metadata = stt.SpeechMetadata(language='en', format=stt.AudioFormats.WAV,
+        codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
+        sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
+        channel=stt.AudioChannels.CHANNEL_MONO)
+    async def stream(): yield pcm
+    result = await capture.async_process_audio_stream(metadata, stream())
+    assert result.result == stt.SpeechResultState.ERROR
