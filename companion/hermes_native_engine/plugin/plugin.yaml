@@ -1,0 +1,11 @@
+name: hermes-ha-native-engine
+version: 0.2.0
+manifest_version: 1
+requires_hermes: ">=0.23.1"
+kind: standalone
+description: "Optional profile-owned native PCM engine; explicit factory activation only."
+license: MIT
+provides_tools: []
+provides_hooks: []
+requires_auth:
+  - openai-codex

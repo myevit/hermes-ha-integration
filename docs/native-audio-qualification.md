@@ -1,15 +1,15 @@
 # Native-audio offline migration candidate
 
-Status: **Offline-qualified optional adapter with a separately installed real
-engine. Not deployed, not an out-of-box public inference engine, and not approval
-to retire the current backend.**
+Status: **Offline-qualified public companion + optional installed native engine
+wheel (0.2.0). No private engine prerequisite. Not deployed and not approval to
+activate or retire the current backend.**
 
 ## Executed matrix
 
 | Gate | Result |
 |---|---|
 | Existing integration unit suite | 230 passed |
-| Companion protocol + authentic installed factory + installed wheel CLI | 20 passed (12 protocol, 8 installed-runtime tests) |
+| Companion protocol + public installed factory + policy/REST + installed wheel CLI | 32 passed (12 protocol, 10 installed-runtime, 8 policy, 2 loopback REST tests) |
 | Real HA 2026.9.4 baseline runtime suite | 35 passed |
 | Real HA 2026.11.1 installed-version runtime fixture | 35 passed |
 | Wheel and source distribution; installed console-script help | PASS |
@@ -20,8 +20,13 @@ to retire the current backend.**
 Hermes host: Python 3.14.9, Hermes 0.23.1, aiohttp 3.14.5. HA fixture
 interpreters: Python 3.14.6. The two fixture locks remain
 `requirements-test-ha-modern.txt` and `requirements-test-ha-current.txt`.
-The actual installed engine and its real Mnemosyne memory implementation are
-loaded from the explicitly supplied runtime, not shipped in this repository.
+The public engine is imported from the built wheel's installed site-packages.
+Actual Mnemosyne dependencies are published `mnemosyne-memory==3.15.1` and
+`mnemosyne-hermes==0.7.1`, not private vendor code. No private backend, profile
+plugin or auth/wire modules are on PYTHONPATH. The normal Hermes core is installed
+using its supported editable public-source developer route: its build guard
+explicitly refuses wheel distributions. Its declared uv dependency overrides are
+needed when pip/uv resolves its editable installation (Pillow conflict otherwise).
 
 The 2026.11 fixture uses a narrowly scoped **test-only** logger-cleanup compatibility
 hook because its published pytest HA plugin trails HA. `runtime_tests/run_modern.py`
@@ -37,13 +42,15 @@ python runtime_tests/run_modern.py runtime_tests -q
 uv build companion
 ```
 
-Installed tests require `HERMES_NATIVE_TEST_PLUGIN` and
-`HERMES_NATIVE_TEST_PROFILE`, plus the genuine engine's runtime dependencies on
-`PYTHONPATH`. HA tests append `HERMES_NATIVE_TEST_PATHS` only after HA has loaded,
-so Hermes' dependencies do not replace the selected HA fixture. The packaged CLI
-test additionally requires `HERMES_NATIVE_PACKAGED_PYTHON`: a disposable interpreter
-with the built wheel installed, not a source-directory import. Without these
-explicit inputs the dependency-specific tests **skip**, not pass.
+Install the built wheel with `[engine]` into a clean supported Hermes runtime.
+Set `HERMES_NATIVE_PACKAGED_PYTHON` to its interpreter and unset `PYTHONPATH` before
+running the companion suite from outside the source package. The CLI subprocess
+adds only this public repository's synthetic network fixtures to its import path.
+The installed tests copy the wheel's inert shim into a disposable profile and use
+the genuine PluginManager loader and factory. No private test-plugin prerequisite
+exists. For each HA fixture, install the wheel/engine dependencies and supported
+Hermes core without replacing that fixture's pinned HA dependency set. Both full
+HA runs passed **35, with zero skips**; do not count an importorskip as qualification.
 
 All factory tests create disposable named-profile homes with synthetic persona,
 policy, PCM, and memory configuration. No production session database or shared
@@ -141,24 +148,40 @@ SQLite/Beam handles; these are not hidden or represented as production leak test
 
 ## Public compatibility and exact remaining gates
 
-The package implements transport, not generic inference. Hermes 0.23.1 has no
-supported native-engine factory registry; the version-qualified loader uses the
-manager's internal loaded-plugin map. The installed implementation is private and
-profile-specific. **A public user cannot obtain native inference merely by
-installing this wheel.**
+The minimal extraction is implemented in the optional wheel engine package:
+genuine owner-parameterized Host, existing Sessions/NativeLoop/Engine, reusable
+finite Policy/Capabilities, PCM conversion and MIT-licensed provider wire/signing
+subset. Its profile-install shim exports `register(ctx)`/`create_engine` and
+declares provider auth for the real SDK caller check. No private imports, persona,
+credentials, binding IDs or auth paths ship. Switch review and select enums are
+explicit runtime configuration; no household enum/default-grant table is copied.
+See [the grounded extraction plan](native-engine-extraction.md) and
+[package provenance](../companion/hermes_native_engine/PROVENANCE.md).
 
-Minimal later ship-compatible extraction: an independently installable plugin
-exposing `register(ctx)`/`create_engine`, a parameterized owner/context/session
-adapter, the existing finite policy interface and provider NativeLoop, and its
-small PCM resampling/auth/wire dependencies. Remove literal profile constraints
-and private facade imports through explicit dependencies/configuration, not by
-adding a second agent or broad default tool access. Publish no persona, policy,
-credentials or household identifiers. This extraction is **not implemented here**;
-it is an exact public-distribution blocker, not a prerequisite for testing an
-already-installed compatible private engine.
+Read-only private qualification supplied the unchanged existing production policy
+to the **same installed public factory** under a synthetic isolated profile.
+Every SQLite connection was guarded to that disposable home. No production DB was
+opened; no sessions, provider requests or tool dispatch occurred. Real schema
+construction preserved 16 native versus 15 text capabilities, with `finish_turn`
+as the sole difference. Those are observed conditions, not a hard-coded limit.
+Production profile/config/policy/facade hashes were unchanged. Only private
+candidate factory options were written, not applied.
 
-Remaining live gates require separate approval: trusted production TLS/credential
-provisioning, owner-controlled listener replacement, same-entry options and the
+A real compatibility pitfall was reproduced: the numerically newer PyPI adapter
+`mnemosyne-hermes==3.1.0` does not preserve owning-home storage over repeated
+isolated profiles. The supported maintained adapter is 0.7.1. The public factory
+now rejects unqualified memory versions **before database construction**, with a
+RED/GREEN regression. Wildcard physical bindings are also explicitly refused.
+Completed-item acknowledgement, finish_turn metadata, cancellation/uncertain
+effects, replay, origin/history isolation and real profile memory remain tested.
+
+Hermes still has no core native-engine registry; the loaded-module/profile-scope
+compatibility seam is version-qualified, not a new framework or SDK claim.
+The retained partial security review is **not a clean security stamp**.
+
+Remaining live gates require new explicit approval: trusted production TLS/managed
+credential provisioning if absent, owner-controlled listener replacement (one
+same-owner service cycle plus one HA restart), same-entry options and the
 existing native pipeline's capture/conversation routing, real provider negotiation,
 physical capture/follow-up/Piper playback, and authorized household-tool parity.
 Production capability policy must be reused, not narrowed to the synthetic test

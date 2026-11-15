@@ -40,11 +40,8 @@ async def loopback():
 @pytest.mark.parametrize('installed', [False, True], ids=['protocol-network-boundary', 'installed-engine-factory'])
 async def test_companion_entry_capture_tls_history_events(hass_ready, enable_custom_integrations, socket_enabled, installed):
     hass = hass_ready
-    if installed and not os.environ.get('HERMES_NATIVE_TEST_PLUGIN'):
-        pytest.skip('separate installed native engine dependency not supplied')
-    for path in os.environ.get('HERMES_NATIVE_TEST_PATHS', '').split(os.pathsep):
-        if path and path not in sys.path:
-            sys.path.append(path)
+    if installed:
+        pytest.importorskip('hermes_native_engine', reason='install companion wheel with [engine] extra')
     test_path = str(Path(__file__).resolve().parents[1] / 'companion' / 'tests')
     sys.path.insert(0, test_path)
     protocol = importlib.import_module('test_protocol')

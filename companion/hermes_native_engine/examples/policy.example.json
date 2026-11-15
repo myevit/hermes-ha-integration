@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "approved": false,
+  "bindings": [{"device_id": "fictional-device", "satellite_id": "assist_satellite.example", "area_id": "example_room", "area_name": "Example room"}],
+  "entities": {
+    "light.example": {"name": "Example lamp", "area_id": "example_room", "actions": ["turn_on", "turn_off"]},
+    "sensor.example": {"name": "Example sensor", "area_id": "example_room", "actions": []}
+  },
+  "routines": {}
+}

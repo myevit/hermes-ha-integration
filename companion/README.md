@@ -5,42 +5,57 @@ wraps an **already installed, explicitly selected, profile-owned native engine**
 it is not another agent, transcription fallback, provider implementation, or HA
 integration domain. Ordinary text still uses the unchanged upstream API.
 
-## Dependency / SDK checkpoint — read before installing
+## Optional public engine (0.2.0)
 
-Hermes 0.23.1's documented `PluginContext` supports tools and CLI commands, but
-neither the installed source nor the official plugin interface declares a native
-conversation-engine registry/factory SDK. Hermes Talk's separately installed
-transport is not such a core SDK. Therefore **this package does not provide
-out-of-box native inference**. An independently installed plugin must implement
-the following interface; no private plugin or policy is included here:
+The wheel now includes `hermes_native_engine`: the extracted, already-qualified
+Host/Engine/NativeLoop, normal Sessions/MemoryManager/Mnemosyne path, reusable
+finite policy/schema library, PCM conversion and licensed subscription provider
+subset. It does **not** require private profile modules, backend files or Talk
+installation. No second agent, invented Host or alternate session writer exists.
+No persona, policy, auth files or bindings are bundled except a clearly fictional,
+**unapproved** standard-entity example.
 
-* `register(ctx)` receives a genuine Hermes `PluginContext` through its loader.
-* Public `create_engine(**explicit_options)` returns the actual callable native
-  engine. No synthetic host/context, all-tools grant or default-profile fallback.
-* `await engine(pcm16_mono_16k, ids)` returns final text only after authoritative
-  provider acknowledgement and policy-bounded tool/memory execution.
-* `engine.take_followup(ids)` consumes the corresponding final boolean.
-* `engine.host.ctx`, `engine.host.home`, `engine.host.scope_home()`,
-  `engine.db.db_path`, and `engine.policy.binding(ids)` identify and validate the
-  actual owner, profile-local database and finite device binding.
-* Cancellation must cancel the provider response and persist interrupted status,
-  not a successful final. Uncancellable effect workers must continue to exclude
-  conflicting/new inference until their outcome is known (`engine.pending` in
-  the qualified dependency). No retry or alternate text writer is permitted.
+Install into an existing supported Hermes runtime (not HA):
 
-`load_engine()` is a small, explicitly version-qualified 0.23.1 compatibility
-seam using the loaded plugin's `create_engine`. It uses Hermes' plugin manager
-and its internal loaded-module map, **not a claimed public native-engine SDK**.
-A future supported core SDK can replace that seam without changing the peer.
-The optional installed-factory qualification tests exercise a real separately
-installed implementation and real memory; ordinary protocol tests explicitly
-label their synthetic inference boundary.
+```
+python -m pip install 'hermes_ha_native_companion-0.2.0-py3-none-any.whl[engine]'
+hermes-ha-native-engine-install --home /path/to/hermes/profiles/voice-example
+```
+
+The second command only installs an inert shim. It refuses existing destinations;
+it neither enables the plugin, edits config nor starts a service. Explicitly enable
+`hermes-ha-native-engine` in that owning profile's `plugins.enabled`. Use its
+`create_engine(policy_path, reviewed_switches=[], select_options={})` factory via
+`--engine-plugin hermes-ha-native-engine`. Put owner-only JSON factory kwargs in
+`--factory-options`. Bindings, reviewed switches and per-target select option enums
+must be explicitly reviewed configuration, never wildcards or package defaults.
+Existing policy JSON can be used unchanged with the binding-specific switch/select
+grants passed at runtime. Changing these grants changes the policy fingerprint.
+Read-only policy mode forbids effects rather than hiding a broad dispatcher.
+
+The same generic `Policy`, `Capabilities` and `Host` library can support an owner's
+separate text facade without publishing its binding policy or custom tool prefix.
+The terminal `finish_turn` belongs only to the native loop, not the text catalog.
+No fixed catalog count is a permission boundary: policy and installed native
+schemas determine the exact admitted set.
+
+The subscription adapter uses the owning profile's Hermes-signed provider API;
+it does not read private auth paths, issue credentials or fall back to default
+profile/metred API keys. Standard scoped `HASS_URL`/`HASS_TOKEN` enable the two
+finite read-only REST operations; neither has an implicit origin/token. Service
+and entity reads use the owning profile's selected MCP. No broad admin grants.
+
+See [license/provenance and supported dependency versions](hermes_native_engine/PROVENANCE.md).
+Hermes 0.23.1 has no core native-engine registry. `load_engine()` deliberately uses
+a version-qualified PluginManager loaded-module compatibility seam, not a claimed
+new core SDK. The public shim supplies `register(ctx)`/`create_engine` and the
+actual provider-signing call frame inside its installed, declared-auth directory.
 
 ## Standalone lifecycle
 
 Install this directory in the **owning Hermes runtime environment**, not inside
-HA. The engine dependency and its provider transport dependencies must already
-be installed and qualified there. No install/restart is performed by this repo.
+HA. Select the optional public engine extra above or a separately qualified engine.
+No production install/restart is performed by this repository's tests.
 
 ```
 python -m pip install ./companion
@@ -102,23 +117,18 @@ to the intended HA entry. The complete engine policy is reused, never published.
 python -m unittest discover -s companion/tests -v
 ```
 
-The 12 protocol tests use real verified loopback TLS and the actual HA client
-source. Eight additional tests require `HERMES_NATIVE_TEST_PLUGIN` (a separately
-installed native plugin directory), `HERMES_NATIVE_TEST_PROFILE` (its genuine
-profile name) and the dependency's runtime on `PYTHONPATH`. They use the real
-installed loader, factory, Engine, Host, PluginContext, SessionDB, MemoryManager
-and Mnemosyne provider in a disposable named profile home. Only provider and MCP
-**network** boundaries are synthetic; production home/config/policy is not used.
-They verify physical-origin and two-device history isolation, same-device follow-up,
-normal session/memory ownership under a foreign outer profile, wrong profile,
-catalog acknowledgement before PCM, and cancellation during missing final
-acknowledgement or an uncertain dispatched effect. For the installed-wheel CLI
-test also set `HERMES_NATIVE_PACKAGED_PYTHON` to an isolated wheel interpreter and
-`HERMES_NATIVE_TEST_PATHS` to the owning runtime's dependency paths. It executes
-packaged main, real plugin discovery/factory, TLS, a synthetic-provider Engine turn,
-and graceful shutdown. Dependency-specific tests skip when not configured.
+The protocol cases use real verified loopback TLS and the actual HA client source.
+The public-factory cases require a supported Hermes installation plus the wheel's
+`[engine]` extra. They exercise its installed shim through the genuine loader,
+factory, Engine, Host, PluginContext, SessionDB, MemoryManager and Mnemosyne in a
+disposable named profile. Only provider and MCP **network** boundaries are synthetic.
+No private plugin/profile paths or `PYTHONPATH` dependencies are required. Set
+`HERMES_NATIVE_PACKAGED_PYTHON` to the clean wheel interpreter to require artifact
+imports and exercise the actual CLI, discovery, TLS turn, lock and shutdown.
+Negative SDK tests also prove the declared-auth shim cannot sign a foreign origin.
+Policy tests verify no default switch/select grants or dangerous generic services.
 
 See [qualification](../docs/native-audio-qualification.md) for executed versions,
-HA 2026.11 fixture compatibility, the verified separate session/memory storage
-contract, and all remaining live/public-distribution gates.
-No real provider/cloud, microphone, playback or physical device test is implied.
+HA fixture compatibility, separate normal session/memory storage and remaining
+live approval gates. No real provider, microphone, playback or device test is
+implied. The security review remains partial, not a clean security stamp.

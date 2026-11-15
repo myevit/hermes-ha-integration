@@ -24,7 +24,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "companion"))
+if not os.environ.get("HERMES_NATIVE_PACKAGED_PYTHON"):
+    sys.path.insert(0, str(ROOT / "companion"))
 from hermes_native_companion.server import create_app, Reservations
 spec = importlib.util.spec_from_file_location("native_client", ROOT / "custom_components/hermes_conversation/native.py")
 native = importlib.util.module_from_spec(spec)

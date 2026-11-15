@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-ha-native-companion"
-version = "0.1.0"
+version = "0.2.0"
 description = "Optional authenticated PCM peer for Hermes Home Assistant"
 requires-python = ">=3.11"
 dependencies = ["aiohttp>=3.11,<4"]
@@ -13,6 +13,13 @@ license-files = ["LICENSE"]
 
 [project.scripts]
 hermes-ha-native-companion = "hermes_native_companion.__main__:main"
+hermes-ha-native-engine-install = "hermes_native_engine.install:main"
+
+[project.optional-dependencies]
+engine = ["jsonschema>=4,<5", "audioop-lts>=0.2.2; python_version>='3.13'", "mnemosyne-memory==3.15.1", "mnemosyne-hermes==0.7.1"]
 
 [tool.setuptools.packages.find]
-include = ["hermes_native_companion*"]
+include = ["hermes_native_companion*", "hermes_native_engine*"]
+
+[tool.setuptools.package-data]
+hermes_native_engine = ["TALK-LICENSE", "PROVENANCE.md", "plugin/plugin.yaml", "examples/*.json"]
