@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-ha-native-companion"
+version = "0.1.0"
+description = "Optional authenticated PCM peer for Hermes Home Assistant"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.11,<4"]
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.scripts]
+hermes-ha-native-companion = "hermes_native_companion.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["hermes_native_companion*"]

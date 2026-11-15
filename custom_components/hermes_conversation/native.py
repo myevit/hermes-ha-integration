@@ -121,7 +121,7 @@ class NativeClient:
                 ids = {"session_id": session_id, "turn_id": uuid.uuid4().hex}
                 async with session.ws_connect(
                     self.origin + "/v1/native", headers=self.headers,
-                    ssl=True, max_msg_size=8192, heartbeat=15,
+                    ssl=True, max_msg_size=8192,
                 ) as socket:
                     await socket.send_json({"type": "start", "version": 1,
                                             "profile": self.profile, **ids,

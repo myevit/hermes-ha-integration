@@ -175,6 +175,22 @@ automation:
           message: Authenticated API connectivity has been off for 2 minutes.
 ```
 
+## Experimental optional native audio
+
+The same config entry can optionally expose a PCM capture STT entity and use a
+separately configured HTTPS native companion; normal text/API mode is unchanged.
+The opt-in options are `native_audio_enabled`, `native_audio_origin`, and
+`native_audio_key`. Use the selected native profile route, not an implicit default.
+HA owns capture, VAD, pipeline/listen lifecycle and TTS. No automatic text retry
+occurs after native failure.
+
+The [companion package](companion/README.md) implements the authenticated protocol
+and a genuine installed-engine factory bridge. **It needs a separately installed
+native-engine plugin; Hermes 0.23.1 has no core native-engine SDK.** It is not yet a
+production backend replacement: storage, physical-origin/multi-device policy and
+provider/physical qualification gates remain. See [executed qualification and
+migration gates](docs/native-audio-qualification.md) before enabling anything.
+
 ## Conversation activity
 
 The same per-entry device also exposes four push-only entities for conversation requests

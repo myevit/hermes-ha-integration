@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from homeassistant.components import stt
 from .const import DOMAIN
 from .native import MAX_PCM
@@ -45,17 +44,16 @@ class HermesNativeCapture(stt.SpeechToTextEntity):
 
     async def async_process_audio_stream(self, metadata, stream):
         pcm = bytearray()
-        deadline = time.monotonic() + 30
         try:
             if not self.check_metadata(metadata):
                 return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
-            async with asyncio.timeout(10) as watchdog:
+            # HA owns VAD/listen duration; do not impose a private 10-second cap.
+            async with asyncio.timeout(60):
                 async for chunk in stream:
                     if type(chunk) is not bytes or len(chunk) % 2 or len(pcm) + len(chunk) > MAX_PCM:
                         return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
                     if chunk:
                         pcm.extend(chunk)
-                        watchdog.reschedule(min(deadline, time.monotonic() + 5))
                     await asyncio.sleep(0)
             return stt.SpeechResult(self.store.put(bytes(pcm)), stt.SpeechResultState.SUCCESS)
         except asyncio.CancelledError:

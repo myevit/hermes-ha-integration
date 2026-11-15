@@ -7,7 +7,7 @@ inherited GitHub Actions workflows were present at this revision.
 
 Keep domain, config-entry version, conversation identity, diagnostics, and normal
 text path. Add an opt-in STT-slot PCM adapter under the same entry. HA still owns
-capture, VAD, its 15-second audio limit, pipeline cancellation and Piper output.
+capture, VAD, its native audio limits, pipeline cancellation and Piper output.
 The adapter returns a short-lived, single-use opaque token, never a transcript.
 Only this entry's conversation agent consumes it; missing/expired tokens fail
 closed and must never be sent to the ordinary text model. Ordinary text continues
@@ -23,10 +23,12 @@ continuity and its complete normal tool policy. No default-profile fallback,
 transcription-to-text delegation, restricted one-device mock, microphone service,
 new listen controller, core fork or firmware changes.
 
-Scope checkpoint: implement the HA-side adapter and testable protocol first.
-A production companion binding requires a separately reviewed extraction of the
-existing private backend; do not vendor its private policy/persona or claim this
-transport contract alone is an end-to-end replacement. Native failure never
+Scope checkpoint: the HA adapter and optional `companion/` HTTPS/WSS peer are
+implemented. The peer binds to an explicitly installed native-engine plugin
+factory; Hermes 0.23.1 has no core native-engine factory SDK. The installed
+factory was qualified offline without publishing its private source or policy.
+This dependency, physical-origin routing and the actual one-database storage
+mismatch remain gates; the transport is not an end-to-end replacement. Native failure never
 replays a potentially effectful request through text. Text fallback means ordinary
 text/local-STT pipelines remain available, not automatic inference retry.
 

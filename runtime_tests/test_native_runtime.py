@@ -53,3 +53,17 @@ async def test_real_capture_bounds(pcm):
     async def stream(): yield pcm
     result = await capture.async_process_audio_stream(metadata, stream())
     assert result.result == stt.SpeechResultState.ERROR
+
+
+async def test_capture_inherits_ha_ceiling_not_private_ten_seconds():
+    import asyncio
+    capture = HermesNativeCapture('offline-duration', CaptureStore())
+    metadata = stt.SpeechMetadata(language='en', format=stt.AudioFormats.WAV,
+        codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
+        sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
+        channel=stt.AudioChannels.CHANNEL_MONO)
+    async def stream():
+        await asyncio.sleep(10.05)
+        yield b'\0\0' * 160
+    result = await capture.async_process_audio_stream(metadata, stream())
+    assert result.result == stt.SpeechResultState.SUCCESS
