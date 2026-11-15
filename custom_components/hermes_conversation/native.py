@@ -75,7 +75,7 @@ class NativeClient:
         self.profile = profile
         self._active = set()
 
-    async def exchange(self, pcm: bytes, session_id: str) -> NativeResult:
+    async def exchange(self, pcm: bytes, session_id: str, *, origin=None) -> NativeResult:
         """A fresh turn is never retried, including after ambiguous disconnect."""
         import aiohttp
 
@@ -89,9 +89,9 @@ class NativeClient:
             connector=self.session.connector, connector_owner=False,
             trace_configs=[trace],
         ) as session:
-            return await self._exchange(session, pcm, session_id)
+            return await self._exchange(session, pcm, session_id, origin=origin)
 
-    async def _exchange(self, session, pcm: bytes, session_id: str) -> NativeResult:
+    async def _exchange(self, session, pcm: bytes, session_id: str, *, origin=None) -> NativeResult:
         """Protocol body separated for deterministic transport tests."""
         if not pcm or len(pcm) % 2 or len(pcm) > MAX_PCM:
             raise NativeError("audio_limit")
@@ -125,7 +125,8 @@ class NativeClient:
                 ) as socket:
                     await socket.send_json({"type": "start", "version": 1,
                                             "profile": self.profile, **ids,
-                                            "sample_rate": 16000})
+                                            "sample_rate": 16000,
+                                            **({"origin": origin} if origin is not None else {})})
                     for offset in range(0, len(pcm), 32000):
                         await socket.send_bytes(pcm[offset:offset + 32000])
                     await socket.send_json({"type": "end"})
@@ -135,7 +136,8 @@ class NativeClient:
                             or any(result[k] != v for k, v in ids.items())
                             or type(result["continue_conversation"]) is not bool
                             or type(result["text"]) is not str
-                            or not 1 <= len(result["text"]) <= 2000):
+                            or not 1 <= len(result["text"]) <= 2000
+                            or TOKEN_PREFIX in result["text"]):
                         raise NativeError("native_result")
                     return NativeResult(result["text"], result["continue_conversation"])
         except asyncio.CancelledError:

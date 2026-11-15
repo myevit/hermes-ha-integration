@@ -62,8 +62,10 @@ async def test_capture_inherits_ha_ceiling_not_private_ten_seconds():
         codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
         sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
         channel=stt.AudioChannels.CHANNEL_MONO)
+    pcm = b'\0\0' * 16000 * 15  # Fifteen seconds, 16-bit mono at 16 kHz.
     async def stream():
-        await asyncio.sleep(10.05)
-        yield b'\0\0' * 160
+        await asyncio.sleep(15.05)
+        yield pcm
     result = await capture.async_process_audio_stream(metadata, stream())
     assert result.result == stt.SpeechResultState.SUCCESS
+    assert capture.store.take(result.text) == pcm

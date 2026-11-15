@@ -1,115 +1,182 @@
-# Native-audio qualification checkpoint
+# Native-audio offline migration candidate
 
-Status: **Implemented protocol peer + authentic installed-engine bridge; NOT yet
-an approved/deployable replacement for the existing backend.**
+Status: **Offline-qualified optional adapter with a separately installed real
+engine. Not deployed, not an out-of-box public inference engine, and not approval
+to retire the current backend.**
 
-## Executed offline
+## Executed matrix
 
 | Gate | Result |
 |---|---|
-| Existing unit suite, `python -m unittest discover -s tests -t . -q` | 229 passed |
-| Companion TLS/factory suite, `python -m unittest discover -s companion/tests -v` with explicit installed dependency | 14 passed (10 protocol + 4 installed-engine) |
-| Real HA 2026.9.4, `python runtime_tests/run_modern.py runtime_tests -q`, with installed-factory environment | 35 passed |
-| Real HA **2026.11.1**, same runtime suite and installed factory | **35 passed** |
-| Wheel + source distribution, `uv build companion` | Built successfully; CLI `--help` executed |
-| Real provider/cloud, microphone, playback, device control | NOT RUN |
-| Production installation, restart, configuration/pipeline changes, decommission | NOT AUTHORIZED / NOT RUN |
+| Existing integration unit suite | 230 passed |
+| Companion protocol + authentic installed factory + installed wheel CLI | 20 passed (12 protocol, 8 installed-runtime tests) |
+| Real HA 2026.9.4 baseline runtime suite | 35 passed |
+| Real HA 2026.11.1 installed-version runtime fixture | 35 passed |
+| Wheel and source distribution; installed console-script help | PASS |
+| Installed wheel main → genuine plugin discovery/factory → verified TLS → actual Engine → synthetic provider final → graceful shutdown | PASS |
+| Real provider inference, microphone, playback or household actions | NOT RUN |
+| Production install, config/pipeline changes, service restart or retirement | NOT RUN |
 
-Exact interpreters: Hermes host **Python 3.14.9**, **Hermes 0.23.1**, aiohttp
-**3.14.5**. Both HA fixtures use **Python 3.14.6**. HA 2026.9.4 uses test plugin
-**0.13.367**; HA 2026.11.1 uses plugin **0.13.375** and pytest **9.0.3**.
-Installed memory dependency qualified here: **mnemosyne-hermes 0.5.0** (real
-provider and `MemoryManager`, not a memory stub).
+Hermes host: Python 3.14.9, Hermes 0.23.1, aiohttp 3.14.5. HA fixture
+interpreters: Python 3.14.6. The two fixture locks remain
+`requirements-test-ha-modern.txt` and `requirements-test-ha-current.txt`.
+The actual installed engine and its real Mnemosyne memory implementation are
+loaded from the explicitly supplied runtime, not shipped in this repository.
 
-The latest published HA pytest plugin pins HA 2026.10.4, not 2026.11.1. The exact
-executed 2026.11 fixture environment is `requirements-test-ha-current.txt`; install
-that complete lock into a disposable Python 3.14 venv with `--no-deps`, then use
-`runtime_tests/run_modern.py`. Its test-only compatibility adapter preloads HA
-before HTTPX plugins and replaces the removed global logger-overwrite cleanup
-hook with resetting the logging class. HA 2026.11 keeps those overrides in a
-per-class closure. This does not patch the integration or production HA. The
-older fixture remains separately pinned in `requirements-test-ha-modern.txt`.
+The 2026.11 fixture uses a narrowly scoped **test-only** logger-cleanup compatibility
+hook because its published pytest HA plugin trails HA. `runtime_tests/run_modern.py`
+preloads HA before HTTPX plugins and resets the logger class where HA removed the
+old module-level reset symbol. It does not patch production HA or the integration.
 
-## What is real versus synthetic
+## Reproduce without production state
 
-The protocol tests use actual verified loopback HTTPS/WSS, certificate rejection,
-bearer auth, the actual HA `NativeClient`, strict capability/profile negotiation,
-bounded PCM, correlated final output, disconnect/explicit cancellation, failure
-after an effect boundary, and durable duplicate-turn rejection even with changed
-session or fresh journal connection. No insecure TLS override is used.
+```
+python -m unittest discover -s tests -t . -q
+python -m unittest discover -s companion/tests -v
+python runtime_tests/run_modern.py runtime_tests -q
+uv build companion
+```
 
-The installed-engine tests use a **separately installed** plugin's actual Hermes
-loader and `register(ctx)`/`create_engine(...)`, real Host/Engine/NativeLoop,
-authentic `PluginContext`, finite registered read catalog, actual admission
-policy, real profile-local SessionDB, real MemoryManager and real Mnemosyne
-provider. The disposable home has the dependency's genuine profile identity,
-not a relabelled default profile. Only provider and MCP **network boundaries** are
-synthetic. Persona, policy and PCM are explicitly synthetic fixture inputs; no
-production config, session DB, memory or household policy is opened by tests.
+Installed tests require `HERMES_NATIVE_TEST_PLUGIN` and
+`HERMES_NATIVE_TEST_PROFILE`, plus the genuine engine's runtime dependencies on
+`PYTHONPATH`. HA tests append `HERMES_NATIVE_TEST_PATHS` only after HA has loaded,
+so Hermes' dependencies do not replace the selected HA fixture. The packaged CLI
+test additionally requires `HERMES_NATIVE_PACKAGED_PYTHON`: a disposable interpreter
+with the built wheel installed, not a source-directory import. Without these
+explicit inputs the dependency-specific tests **skip**, not pass.
 
-Actual HA tests now exercise the same-entry STT capture/token, conversation
-entity, actual TLS client/companion/installed engine, two-turn session/history,
-follow-up flag, activity start/completion, zero residual active requests and
-setup/unload without lingering heartbeat timers. A real delayed-capture test
-passes after 10.05 seconds: the private 10-second capture watchdog was removed;
-HA's 60-second capture ceiling and the independent 1 MiB byte budget apply.
-Existing text/session/silence/diagnostics/naming regression tests remain intact.
+All factory tests create disposable named-profile homes with synthetic persona,
+policy, PCM, and memory configuration. No production session database or shared
+memory surface is opened. The real loader, `register(ctx)`, factory, Host,
+PluginContext, Engine, NativeLoop, admission policy, SessionDB, MemoryManager and
+Mnemosyne implementation run unchanged. Only external MCP/catalog and provider
+WebSocket **network boundaries** are synthetic.
 
-Provider catalog mismatch is refused before sending PCM. Cancellation while
-awaiting final tool-output acknowledgement yields interrupted session metadata
-and no successful final/semantic-summary row. Two native utterances preserve
-one conversation session and project its semantic history into the next
-provider conversation. Real memory identity and temporary-home isolation are
-asserted across both turns.
+## Physical origin and history
 
-## Explicit hard gaps — do not call these complete
+HA obtains device, area and satellite correlation from its real registries. A
+satellite must belong to the supplied device; missing or inconsistent partial
+origin fails closed without text dispatch. The client sends an optional `origin`
+object with exactly `device_id`, `satellite_id`, `area_id` alongside session/turn
+IDs. The bridge intersects it with the credential's explicitly selected finite
+binding set and verifies the authoritative engine-policy area. The Engine still
+receives its existing four-field IDs; the transport does not rewrite its policy.
 
-1. **No core native-engine SDK / packaged generic inference engine.** Official
-   plugin documentation and installed Hermes 0.23.1 expose PluginContext, not a
-   native-engine registry. The peer is fully implemented but still requires an
-   independently installed compatible native-engine plugin. The small loader
-   seam accesses the manager's loaded-module map, explicitly version-qualified;
-   it is not advertised as a stable core factory API. No private implementation,
-   persona, tool facade or household binding has been published.
-2. **Requested one-database storage is NOT present in this actual runtime.** The
-   genuine factory returned `hermes_state.SessionDB`; installed-source lookup
-   found no `MnemosyneSessionDB`. The real memory provider used a separate
-   profile-local Beam database. Qualification prints `ACTUAL_ONE_DB False`.
-   The companion's replay journal shares the engine's existing database and
-   never fabricates session rows, but cannot honestly turn that installed
-   two-store architecture into one-db qualification. Resolve the owning
-   runtime's supported SessionDB/memory configuration before migration.
-3. **Physical-origin and multi-device policy parity remain unqualified.** Version
-   one sends session/turn IDs, not physical device identity. The credential is
-   explicitly bound to one finite device/satellite principal; sharing it across
-   devices is unsupported. The transport does not replace the engine's complete
-   policy, but that alone does not establish full household route parity.
-4. Provider inference/real acknowledgements, pipeline local-intent bypass, Piper
-   generation, physical capture/playback and actual activation remain separately
-   approved gates. Synthetic provider network events are not cloud qualification.
+A credential defaults to one device/satellite pair. `--bindings-file` can select
+an explicit nonempty list of at most 64 policy-authorized pairs, including the
+primary pair. No wildcard or automatic full-household grant exists. Missing origin
+is allowed only for the backward-compatible single-principal endpoint. Multi-device
+endpoints require it. The bearer authenticates **HA as the caller**, not satellite
+hardware independently; keep it private and scoped to the intended HA entry.
 
-## Existing service owner / retirement gate
+Actual HA → TLS client → companion → genuine factory/Engine tests assert:
 
-Read-only current-process ancestry identified the live native listener beneath
-its recovery supervisor and **s6-supervise native-audio**. The listener and
-recovery supervisor run as the non-root application uid; s6 is the lifecycle
-owner. A direct s6 status probe was permission-denied. Current PID/command/uid
-receipt is kept locally, not published with private addresses, profile paths,
-entry IDs or household policy. No service was restarted or changed.
+* Registry device/satellite/area reaches persisted Engine origin metadata.
+* Same-device follow-up preserves conversation identity and semantic history.
+* A second device using the same HA conversation ID creates a separate native
+  session and receives none of the first device's semantic history.
+* Forged area and mismatched registry satellite/device are rejected before Engine
+  inference; no native error is retried through the ordinary text endpoint.
+* Activity finishes and entry unload leaves no transport heartbeat tasks.
 
-The candidate must **replace that listener**, not add a third backend. Standalone
-startup requires its existing lifecycle lock, explicit owning profile/plugin,
-managed credential, finite binding and verified TLS. Shutdown cancels transport
-work and waits for the engine's uncertain pending effects before closing its DB
-and releasing the process/lock. Do not mint a different lock to bypass the owner.
+The delayed-capture test now waits **15.05 real seconds** before delivering PCM.
+HA owns VAD/listening; the adapter retains its 60-second safety ceiling and
+independent 1 MiB byte budget. The ordinary text/session/silence/naming tests remain
+unchanged and pass. This is not a physical listening test.
 
-After resolving all gaps and explicit lifecycle/HA restart/route-switch approval:
-back up current integration bytes, entry options and pipeline records; retain
-conversation identity and ordinary text mode; install into the same integration
-domain; switch only through supported HA APIs; observe provider/physical gates;
-then retire the old capture integration and dedicated listener through their
-actual owners. Keep rollback material. Never remove shared policy, tools,
-persona or session/memory databases. No upstream PR until later approval.
+## Session and memory ownership: no invented one-DB requirement
 
-No Actions workflows, CI secrets or administrative permissions were added.
-Private raw logs and receipts are deliberately excluded from the public fork.
+The current normal Hermes session contract uses `hermes_state.SessionDB` (the
+process registry's `acquire()` constructs that class). Selecting
+`memory.provider: mnemosyne` loads a **memory provider**, not a replacement session
+DB. Installed-source inspection did not find a `MnemosyneSessionDB` backend.
+The authentic native factory uses the same class and profile-local `state.db`.
+Real Mnemosyne memory uses its separate profile-owned store. This separation is
+not evidence of a configuration bypass and is **not a migration blocker**.
+
+The regression test opens the normal registry in an isolated owning profile,
+compares the actual class/path with the factory, loads the actual configured memory
+provider, then runs a native turn while an unrelated profile is the outer context.
+It verifies restored outer context, no unrelated-profile database, and unchanged
+isolated default-root database. The earlier `ACTUAL_ONE_DB False` observation was
+accurate; interpreting it as a requirement to consolidate databases was not.
+Do not migrate, relabel, or replace either production store to satisfy that claim.
+
+Authoritative architecture references:
+[Hermes memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory),
+[memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers),
+[profiles](https://hermes-agent.nousresearch.com/docs/user-guide/profiles).
+Installed source and executed profile tests establish the specific runtime contract.
+
+## Security and uncertain effects
+
+* Constant-time bearer comparison, TLS required, redirects refused, profile and
+  capability types exact. Both untrusted and **expired but trusted** certificates
+  fail without PCM dispatch. Certificate renewal and opaque-bearer rotation remain
+  owner-managed; the bearer is not a signed expiring lease.
+* Admission is atomically reserved before PCM in the existing Engine database.
+  A separate-interpreter replay attempt is rejected, as are fresh-connection and
+  changed-session replays. Standalone instances must share the old owner's
+  exclusive lifecycle lock; a new lock is not an acceptable migration workaround.
+* Reservation storage is bounded at 100,000 identities and fails closed. Tests fill
+  the bound and verify no eviction/reacceptance. There is **no automatic pruning**:
+  deleting old identities while credentials remain valid would re-enable replay.
+  Maintenance requires a drained owner, revoked old credential, backup and explicit
+  approval; this candidate never silently cleans the journal.
+* Capture handles are one-use, expire in 30 seconds, and are limited to four entries.
+  Expired handles are purged on use/insertion; entry unload clears memory.
+* Actual Engine cancellation after a synthetic service-dispatch network handoff
+  keeps the uncancellable effect worker pending, refuses another turn, records
+  uncertain interruption and refuses replay. It never emits a successful final
+  for that cancelled turn. The transport never retries via another writer.
+* Catalog mismatch is refused before provider PCM. Missing final acknowledgement
+  cancels and records interruption, not a final semantic response.
+* Bounded upload/message/deadline limits remain. Public errors are fixed strings;
+  provider errors, credentials and profile paths never cross the wire. Capture
+  marker text is rejected in final output before downstream speech or text use.
+
+Negative TLS tests intentionally produce loopback handshake-reset diagnostics.
+Installed-runtime tests also expose dependency ResourceWarnings for retained
+SQLite/Beam handles; these are not hidden or represented as production leak tests.
+
+## Public compatibility and exact remaining gates
+
+The package implements transport, not generic inference. Hermes 0.23.1 has no
+supported native-engine factory registry; the version-qualified loader uses the
+manager's internal loaded-plugin map. The installed implementation is private and
+profile-specific. **A public user cannot obtain native inference merely by
+installing this wheel.**
+
+Minimal later ship-compatible extraction: an independently installable plugin
+exposing `register(ctx)`/`create_engine`, a parameterized owner/context/session
+adapter, the existing finite policy interface and provider NativeLoop, and its
+small PCM resampling/auth/wire dependencies. Remove literal profile constraints
+and private facade imports through explicit dependencies/configuration, not by
+adding a second agent or broad default tool access. Publish no persona, policy,
+credentials or household identifiers. This extraction is **not implemented here**;
+it is an exact public-distribution blocker, not a prerequisite for testing an
+already-installed compatible private engine.
+
+Remaining live gates require separate approval: trusted production TLS/credential
+provisioning, owner-controlled listener replacement, same-entry options and the
+existing native pipeline's capture/conversation routing, real provider negotiation,
+physical capture/follow-up/Piper playback, and authorized household-tool parity.
+Production capability policy must be reused, not narrowed to the synthetic test
+catalog or widened to defaults. The existing text entry and memory/session owners
+must remain intact. Any unrelated original ValueError requires reproduction before
+changing it.
+
+## Retirement is after acceptance only
+
+The live service owner was rechecked read-only: native listener → recovery
+supervisor → `s6-supervise native-audio`. Private PID/uid/path/hash, HA versions,
+entry/pipeline and activation/rollback receipts stay outside the public fork.
+No listener, integration, profile or pipeline was changed.
+
+After explicit approval, back up exact current integration bytes, entry options,
+pipelines and service configuration; provision the candidate under the same owner
+and existing lifecycle lock; retain the existing conversation entry and native
+pipeline identity/Piper configuration; switch via supported HA APIs. Keep the old
+integration and listener material for rollback. Only after live acceptance retire
+the old capture integration and listener through their actual owners. Never remove
+shared policy, tools, persona or session/memory databases. No upstream PR is implied.

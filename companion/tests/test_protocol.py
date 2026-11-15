@@ -11,6 +11,7 @@ import ipaddress
 import os
 from pathlib import Path
 import ssl
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,13 +35,14 @@ KEY = "synthetic-offline-credential-" + "x" * 48
 PCM = b"\x01\x00" * 160
 
 
-def tls_contexts(directory):
+def tls_contexts(directory, *, expired=False):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Offline loopback")])
     now = datetime.now(timezone.utc)
     certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
         .public_key(key.public_key()).serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=1))
+        .not_valid_before(now - timedelta(days=2))
+        .not_valid_after(now - timedelta(days=1) if expired else now + timedelta(days=1))
         .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
         .sign(key, hashes.SHA256()))
     certfile, keyfile = Path(directory) / "cert.pem", Path(directory) / "key.pem"
@@ -137,6 +139,46 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(native.NativeError):
             await client.exchange(PCM, "conversation")
         self.assertFalse(self.bridge.calls)
+
+    async def test_expired_trusted_certificate(self):
+        certdir = Path(self.tmp.name) / 'expired'
+        certdir.mkdir()
+        server_tls, client_tls = tls_contexts(certdir, expired=True)
+        runner = web.AppRunner(create_app(self.bridge, KEY))
+        await runner.setup()
+        try:
+            site = web.TCPSite(runner, '127.0.0.1', 0, ssl_context=server_tls)
+            await site.start()
+            origin = 'https://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_tls)) as session:
+                with self.assertRaises(native.NativeError):
+                    await native.NativeClient(session, origin, KEY, 'voice').exchange(PCM, 'conversation')
+            self.assertFalse(self.bridge.calls)
+        finally:
+            await runner.cleanup()
+
+    async def test_reservation_process_restart_and_bounded_capacity(self):
+        journal = Reservations(self.bridge)
+
+        journal.reserve('before_restart')
+        script = ('from pathlib import Path; from hermes_native_companion.server import Reservations; '
+                  'b=type("Owner",(),dict(db_path=Path(__import__("sys").argv[1]),profile="voice",'
+                  'device_id="device",satellite_id="assist_satellite.example"))(); '
+                  'j=Reservations(b); j.reserve("before_restart")')
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, str(self.bridge.db_path),
+            env={**os.environ, 'PYTHONPATH': str(ROOT / 'companion')},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _, error = await proc.communicate()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(b'IntegrityError', error)
+        import sqlite3
+        with sqlite3.connect(self.bridge.db_path) as db:
+            db.executemany('INSERT INTO hermes_native_reservations VALUES (?,?,?,?)',
+                [('voice', 'device', 'assist_satellite.example', 'fill_' + str(i)) for i in range(99999)])
+        with self.assertRaisesRegex(ValueError, 'capacity'):
+            journal.reserve('must_not_evict')
+        with self.assertRaisesRegex(ValueError, 'capacity'):
+            journal.reserve('before_restart')
 
     async def test_handshake_types(self):
         for i, changes in enumerate(({"profile": "other"}, {"version": True}, {"sample_rate": True}, {"session_id": "../bad"})):

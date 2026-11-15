@@ -89,6 +89,7 @@ class InstalledEngine(unittest.IsolatedAsyncioTestCase):
         self.scope.__enter__()
         source = Path(os.environ['HERMES_NATIVE_TEST_PLUGIN'])
         manifest = parse_manifest_file(source / 'plugin.yaml', source, 'user', '')
+        self.plugin_name = manifest.name
         self.manager = PluginManager(scope_key=str(self.home))
         # Actual installed loader calls register(ctx); no manufactured runtime/profile.
         self.manager._load_plugin(manifest)
@@ -175,6 +176,208 @@ class InstalledEngine(unittest.IsolatedAsyncioTestCase):
         print('ACTUAL_SESSION_DB', type(self.engine.db).__module__ + '.' + type(self.engine.db).__name__)
         self.assertEqual(memory_paths[0], memory_paths[1])
         print('ACTUAL_ONE_DB', memory_paths[0] == Path(self.engine.db.db_path).resolve())
+
+    async def test_actual_factory_origin_and_device_history_isolation(self):
+        from aiohttp import web
+        from hermes_native_companion import create_app
+        from test_protocol import KEY, native
+        # Both bindings are synthetic; use the actual policy/session implementation.
+        binding = {'device_id': 'second', 'satellite_id': 'assist_satellite.second',
+                   'area_id': 'second_room', 'area_name': 'Second room'}
+        self.engine.policy.bindings[('second', 'assist_satellite.second')] = binding
+        bridge = EngineBridge(self.engine, profile=self.profile, device_id='device',
+            satellite_id='assist_satellite.example',
+            bindings=[['device', 'assist_satellite.example'], ['second', 'assist_satellite.second']])
+        await self.runner.cleanup()
+        self.runner = web.AppRunner(create_app(bridge, KEY))
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, '127.0.0.1', 0, ssl_context=self.server_tls)
+        await site.start()
+        origin = 'https://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
+        client = native.NativeClient(self.session, origin, KEY, self.profile)
+        first_origin = dict(device_id='device', satellite_id='assist_satellite.example', area_id='example')
+        second_origin = dict(device_id='second', satellite_id='assist_satellite.second', area_id='second_room')
+        for physical in (first_origin, second_origin, first_origin):
+            self.engine.connect = ProviderWire().connect
+            result = await client.exchange(PCM, 'shared_conversation', origin=physical)
+            self.assertTrue(result.follow_up)
+        rows = self.engine.db.list_recent_sessions_bounded()
+        self.assertEqual(len(rows), 2)
+        counts = {}
+        for row in rows:
+            receipt = json.loads(self.engine.db.get_session(row['id'])['origin_json'])
+            counts[receipt['device_id']] = sum(m.get('display_kind') == 'native_audio'
+                for m in self.engine.db.get_messages(row['id']))
+            self.assertEqual(receipt['area_id'], 'example' if receipt['device_id'] == 'device' else 'second_room')
+        self.assertEqual(counts, {'device': 2, 'second': 1})
+        with self.assertRaises(native.NativeError):
+            await client.exchange(PCM, 'shared_conversation', origin={**first_origin, 'area_id': 'forged'})
+        self.assertEqual(self.engine.db.session_count(), 2)
+
+    async def test_normal_session_contract_and_foreign_profile_scope(self):
+        import hashlib
+        default_db = self.home.parent.parent / 'state.db'
+        before = hashlib.sha256(default_db.read_bytes()).hexdigest()
+        from hermes_cli.plugins import _plugin_home_scope
+        from hermes_state_registry import acquire
+        from plugins.memory import load_memory_provider
+        from hermes_cli.config import load_config_readonly
+        foreign = self.home.parent / 'unrelated'
+        foreign.mkdir()
+        (foreign / 'config.yaml').write_text('{}\n')
+        with _plugin_home_scope(foreign):
+            with self.engine.host.scope_home():
+                normal = acquire()
+                try:
+                    self.assertIs(type(normal), type(self.engine.db))
+                    self.assertEqual(Path(normal.db_path).resolve(), Path(self.engine.db.db_path).resolve())
+                    provider = load_memory_provider(load_config_readonly()['memory']['provider'])
+                    # Normal memory-provider loading and native both select Mnemosyne;
+                    # neither changes Hermes' session storage class into a memory store.
+                    self.assertEqual(type(provider).__name__, 'MnemosyneMemoryProvider')
+                finally:
+                    normal.close()
+            result = await self.real_bridge.exchange(PCM, self.real_bridge.ids('scope', 'scope_turn'))
+            self.assertEqual(result[0], 'Offline answer?')
+            from hermes_constants import get_hermes_home
+            self.assertEqual(Path(get_hermes_home()).resolve(), foreign.resolve())
+        self.assertFalse((foreign / 'state.db').exists())
+        self.assertEqual(hashlib.sha256(default_db.read_bytes()).hexdigest(), before)
+
+    async def test_actual_factory_cancel_dispatched_effect_no_retry(self):
+        import threading
+        started, release = threading.Event(), threading.Event()
+        calls = []
+        self.engine.policy.entities['light.example']['actions'] = ['turn_on']
+        def network(args, **kwargs):
+            calls.append(args)
+            started.set()
+            if not release.wait(10):
+                raise TimeoutError('synthetic network timeout')
+            return json.dumps({'success': True})
+        self.engine.host.ctx.register_tool('ha_call_service', 'offline', {
+            'name': 'ha_call_service', 'description': 'Synthetic effect NETWORK boundary',
+            'parameters': {'type': 'object', 'properties': {k: {'type': 'string'} for k in
+                ('domain', 'service', 'entity_id', 'data')}, 'required': ['domain', 'service', 'entity_id', 'data'],
+                'additionalProperties': False}}, network)
+        class EffectWire(ProviderWire):
+            async def send_json(self, event):
+                if event['type'] != 'response.create':
+                    return await super().send_json(event)
+                self.sent.append(copy.deepcopy(event))
+                await self.queue.put({'type': 'response.created', 'response': {'id': 'effect_response'}})
+                await self.queue.put({'type': 'response.done', 'response': {'id': 'effect_response',
+                    'status': 'completed', 'output': [{'type': 'function_call', 'name': 'home_control',
+                    'call_id': 'effect_call', 'arguments': json.dumps({'entity_id': 'light.example',
+                        'action': 'turn_on', 'data': {}})}]}})
+        wire = EffectWire()
+        self.engine.connect = wire.connect
+        ids = self.real_bridge.ids('effect', 'effect_turn')
+        task = asyncio.create_task(self.real_bridge.exchange(PCM, ids))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 5))
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(self.engine.pending)
+            with self.assertRaisesRegex(ValueError, 'busy'):
+                await self.real_bridge.exchange(PCM, self.real_bridge.ids('effect', 'different_turn'))
+            self.assertEqual(len(calls), 1)
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, *tuple(self.engine.pending), return_exceptions=True)
+        with self.assertRaisesRegex(ValueError, 'replayed'):
+            await self.real_bridge.exchange(PCM, ids)
+        self.assertEqual(len(calls), 1)
+        messages = self.engine.db.get_messages(self.engine.db.list_recent_sessions_bounded()[0]['id'])
+        self.assertTrue(any('Effects may be uncertain' in str(m) for m in messages))
+        self.assertFalse(any(m.get('role') == 'assistant' and m.get('content') == 'Offline answer?' for m in messages))
+
+    async def test_packaged_cli_real_factory_tls_turn(self):
+        import fcntl
+        import socket
+        executable = os.environ.get('HERMES_NATIVE_PACKAGED_PYTHON')
+        if not executable:
+            self.skipTest('installed wheel interpreter not supplied')
+        from test_protocol import KEY, native
+        root = Path(self.tmp.name)
+        options, credential = root / 'factory.json', root / 'credential'
+        options.write_text(json.dumps({'policy_path': str(self.home / 'policy.json')}))
+        (self.home / 'plugins' / self.plugin_name).symlink_to(Path(os.environ['HERMES_NATIVE_TEST_PLUGIN']))
+        with (self.home / 'config.yaml').open('a') as config:
+            config.write('plugins:\n  enabled:\n    - ' + self.plugin_name + '\n')
+        credential.write_text(KEY)
+        for path in (options, credential):
+            path.chmod(0o600)
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        self.engine.db.close()
+        # Actual packaged main(), loader, factory, TLS app and shutdown. Only
+        # external catalog/provider networks are synthetic, as in other tests.
+        script = '''import sys
+from pathlib import Path
+import hermes_native_companion.__main__ as cli
+assert 'site-packages' in cli.__file__, cli.__file__
+from unittest.mock import patch
+from test_installed_engine import ProviderWire
+original = cli.load_engine
+def discovery(**kwargs):
+    from hermes_cli.plugins import get_plugin_manager
+    manager = get_plugin_manager()
+    loaded = [p for p in manager._plugins.values() if getattr(p.module, 'create_engine', None)]
+    assert len(loaded) == 1
+    loaded[0].module.get_ctx().register_tool('mcp__homeassistant__ha_get_state', 'offline', {
+        'name': 'mcp__homeassistant__ha_get_state', 'description': 'Synthetic catalog network',
+        'parameters': {'type': 'object', 'properties': {'entity_id': {'type': 'string'}},
+            'required': ['entity_id'], 'additionalProperties': False}},
+        lambda args, **kw: '{}')
+def selected(*args, **kwargs):
+    engine = original(*args, **kwargs)
+    engine.connect = ProviderWire().connect
+    return engine
+with patch('tools.mcp_tool_discovery.discover_mcp_tools', side_effect=discovery), patch.object(cli, 'load_engine', selected):
+    cli.main()
+'''
+        process = await asyncio.create_subprocess_exec(executable, '-c', script,
+            '--home', str(self.home), '--profile', self.profile, '--engine-plugin', self.plugin_name,
+            '--factory-options', str(options), '--device-id', 'device',
+            '--satellite-id', 'assist_satellite.example', '--credential-file', str(credential),
+            '--tls-cert', str(root / 'cert.pem'), '--tls-key', str(root / 'key.pem'),
+            '--exclusive-lock', str(root / 'owner.lock'), '--port', str(port),
+            env={**os.environ, 'PYTHONPATH': os.pathsep.join([str(Path(__file__).parent),
+                *os.environ.get('HERMES_NATIVE_TEST_PATHS', os.environ.get('PYTHONPATH', '')).split(os.pathsep)])},
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        origin = 'https://127.0.0.1:' + str(port)
+        try:
+            for _ in range(100):
+                if process.returncode is not None:
+                    _, error = await process.communicate()
+                    self.fail(error.decode()[-3000:])
+                try:
+                    async with self.session.get(origin + '/v1/native/capabilities',
+                            headers={'Authorization': 'Bearer ' + KEY}) as response:
+                        if response.status == 200:
+                            break
+                except Exception:
+                    pass
+                await asyncio.sleep(.1)
+            else:
+                self.fail('packaged CLI did not become ready')
+            final = await native.NativeClient(self.session, origin, KEY, self.profile).exchange(PCM, 'packaged')
+            self.assertEqual(final.text, 'Offline answer?')
+            with (root / 'owner.lock').open('a') as lock:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            if process.returncode is None:
+                process.terminate()
+            _, errors = await asyncio.wait_for(process.communicate(), 20)
+        self.assertEqual(process.returncode, 0, errors.decode()[-3000:])
+        with (root / 'owner.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     async def test_actual_factory_wrong_profile(self):
         with self.assertRaises(ValueError):

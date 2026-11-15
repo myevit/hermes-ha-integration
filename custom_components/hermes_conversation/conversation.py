@@ -459,7 +459,18 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
                 if store is None or native is None:
                     raise NativeError("native_disabled")
                 pcm = store.take(user_input.text)
-                final = await native.exchange(pcm, conv_id)
+                device_id = getattr(user_input, "device_id", None)
+                satellite_id = getattr(user_input, "satellite_id", None)
+                origin = None
+                if device_id or satellite_id:
+                    device = dr.async_get(self.hass).async_get(device_id) if device_id else None
+                    satellite = er.async_get(self.hass).async_get(satellite_id) if satellite_id else None
+                    if (not device or not satellite or satellite.device_id != device_id
+                            or not device.area_id):
+                        raise NativeError("native_origin_unavailable")
+                    origin = {"device_id": device_id, "satellite_id": satellite_id,
+                              "area_id": device.area_id}
+                final = await native.exchange(pcm, conv_id, **({"origin": origin} if origin else {}))
                 text = _sanitize_text_for_speech(final.text)
                 silent = is_silence(final.text)
                 if not silent:

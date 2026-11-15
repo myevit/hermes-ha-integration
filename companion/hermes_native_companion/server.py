@@ -33,7 +33,7 @@ class EngineBridge:
     dependency is NOT an inference implementation shipped by Hermes core.
     """
 
-    def __init__(self, engine, *, profile, device_id, satellite_id):
+    def __init__(self, engine, *, profile, device_id, satellite_id, bindings=None):
         from hermes_cli.plugins import PluginContext
 
         self.profile = identifier(profile)
@@ -60,6 +60,32 @@ class EngineBridge:
             raise TypeError("native engine interface unavailable")
         # Check the exact authenticated binding BEFORE advertising capabilities.
         engine.policy.binding(self.ids("probe", "probe"))
+        self.bindings = {(self.device_id, self.satellite_id)}
+        if bindings is not None:
+            if type(bindings) is not list or not 1 <= len(bindings) <= 64:
+                raise ValueError("finite bindings required")
+            for pair in bindings:
+                if type(pair) is not list or len(pair) != 2 or any(type(v) is not str for v in pair):
+                    raise ValueError("invalid binding")
+                engine.policy.binding(dict(session_id="probe", turn_id="probe",
+                    device_id=identifier(pair[0]), satellite_id=pair[1]))
+            self.bindings = {tuple(pair) for pair in bindings}
+            if (self.device_id, self.satellite_id) not in self.bindings:
+                raise ValueError("primary binding must be explicitly allowed")
+
+    def origin_ids(self, session_id, turn_id, origin):
+        if type(origin) is not dict or set(origin) != {"device_id", "satellite_id", "area_id"}:
+            raise ValueError("physical origin required")
+        if any(type(v) is not str or not 1 <= len(v) <= 128 for v in origin.values()):
+            raise ValueError("invalid physical origin")
+        if (origin["device_id"], origin["satellite_id"]) not in self.bindings:
+            raise ValueError("origin outside credential binding")
+        ids = dict(session_id=identifier(session_id), turn_id=identifier(turn_id),
+                   device_id=identifier(origin["device_id"]), satellite_id=origin["satellite_id"])
+        binding = self.engine.policy.binding(ids)
+        if origin["area_id"] != binding["area_id"]:
+            raise ValueError("origin area mismatch")
+        return ids
 
     def ids(self, session_id, turn_id):
         return {"session_id": identifier(session_id), "turn_id": identifier(turn_id),
@@ -68,7 +94,8 @@ class EngineBridge:
     async def exchange(self, pcm, ids):
         text = await self.engine(pcm, ids)
         followup = self.engine.take_followup(ids)
-        if type(text) is not str or not 1 <= len(text) <= 2000 or type(followup) is not bool:
+        if (type(text) is not str or not 1 <= len(text) <= 2000
+                or "hermes-native:" in text or type(followup) is not bool):
             raise ValueError("invalid engine final")
         return text, followup
 
@@ -89,14 +116,15 @@ class Reservations:
         self.db.commit()
         self.principal = (bridge.profile, bridge.device_id, bridge.satellite_id)
 
-    def reserve(self, turn):
+    def reserve(self, turn, ids=None):
+        principal = self.principal if ids is None else (self.principal[0], ids["device_id"], ids["satellite_id"])
         with self.db:
             # BEGIN IMMEDIATE makes capacity + reservation atomic across workers.
             self.db.execute("BEGIN IMMEDIATE")
             if self.db.execute("SELECT COUNT(*) FROM hermes_native_reservations").fetchone()[0] >= 100000:
                 raise ValueError("reservation capacity")
             self.db.execute("INSERT INTO hermes_native_reservations VALUES (?, ?, ?, ?)",
-                            (*self.principal, turn))
+                            (*principal, turn))
 
     def close(self):
         self.db.close()
@@ -140,15 +168,19 @@ def create_app(bridge: EngineBridge, key: str):
         try:
             async with asyncio.timeout(55):
                 start = await socket.receive_json(timeout=10)
-                if (type(start) is not dict or set(start) != {
-                        "type", "version", "profile", "session_id", "turn_id", "sample_rate"}
+                required = {"type", "version", "profile", "session_id", "turn_id", "sample_rate"}
+                if (type(start) is not dict or set(start) not in (required, required | {"origin"})
                         or start["type"] != "start" or type(start["version"]) is not int
                         or start["version"] != 1 or start["profile"] != bridge.profile
                         or type(start["sample_rate"]) is not int or start["sample_rate"] != 16000):
                     raise ValueError("handshake")
                 ids = bridge.ids(start["session_id"], start["turn_id"])
+                if "origin" in start:
+                    ids = bridge.origin_ids(start["session_id"], start["turn_id"], start["origin"])
+                elif len(getattr(bridge, "bindings", (None,))) != 1:
+                    raise ValueError("physical origin required for multiple bindings")
                 # Burn admission BEFORE PCM receipt or inference; never clear on failure.
-                journal.reserve(ids["turn_id"])
+                journal.reserve(ids["turn_id"], ids)
                 while True:
                     message = await socket.receive(timeout=10)
                     if message.type == WSMsgType.BINARY:

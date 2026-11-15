@@ -36,6 +36,8 @@ def main():
                         help="Owner-only JSON kwargs for installed plugin create_engine")
     parser.add_argument("--device-id", required=True)
     parser.add_argument("--satellite-id", required=True)
+    parser.add_argument("--bindings-file", type=Path,
+                        help="Owner-only JSON list of explicit device/satellite pairs; no wildcard")
     parser.add_argument("--credential-file", required=True, type=Path)
     parser.add_argument("--tls-cert", required=True)
     parser.add_argument("--tls-key", required=True)
@@ -48,7 +50,7 @@ def main():
     home = args.home.resolve(strict=True)
     if args.profile == "default" or home.name != args.profile or home.parent.name != "profiles":
         parser.error("explicit named Hermes profile home required")
-    for path in (args.credential_file, args.factory_options):
+    for path in (args.credential_file, args.factory_options, *([args.bindings_file] if args.bindings_file else [])):
         if path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
             parser.error("configuration/credential file must be owned by this uid, mode 0600")
     lock = args.exclusive_lock.open("a")
@@ -60,7 +62,8 @@ def main():
         engine = load_engine(get_plugin_manager(), args.engine_plugin,
                              json.loads(args.factory_options.read_text()))
         bridge = EngineBridge(engine, profile=args.profile, device_id=args.device_id,
-                              satellite_id=args.satellite_id)
+                              satellite_id=args.satellite_id,
+                              bindings=json.loads(args.bindings_file.read_text()) if args.bindings_file else None)
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(args.tls_cert, args.tls_key)

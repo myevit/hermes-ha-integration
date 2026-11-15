@@ -101,6 +101,18 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
             await client._exchange(peer, b'\0\0', 'session')
         self.assertEqual(peer.connections, 1)
 
+    async def test_marker_in_final_never_reaches_downstream(self):
+        peer = Peer()
+        async def contaminated():
+            return {'type': 'final', 'text': 'Do not speak hermes-native:private',
+                    'continue_conversation': False,
+                    **{k: peer.socket.start[k] for k in ('session_id', 'turn_id')}}
+        peer.socket.receive_json = contaminated
+        client = NativeClient(None, 'https://example.org', 'x' * 40, 'worker')
+        with self.assertRaisesRegex(NativeError, '^native_exchange_failed$'):
+            await client._exchange(peer, b'\0\0', 'session')
+        self.assertEqual(peer.connections, 1)
+
     async def test_cancel(self):
         peer = Peer(); waiting = asyncio.Event()
         async def receive():

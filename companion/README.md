@@ -62,12 +62,15 @@ The CLI runs only the selected profile's enabled plugins and never enables all
 tools. The configured factory remains responsible for a finite tool catalog and
 admission policy. Do not install an unreviewed factory into a privileged profile.
 
-One credential is intentionally bound to one explicit device/satellite principal
-in this version-one wire contract, because the HA adapter currently sends no
-physical device identity. **Do not share this endpoint/credential across physical
-devices.** Multi-device routing and physical-origin authentication remain a
-migration gate; this restriction is real, not presented as complete household
-policy parity. The engine's full policy is reused, never republished or replaced.
+One credential defaults to one explicit device/satellite principal. An optional
+owner-only `--bindings-file` selects a finite JSON list of `[device_id, satellite_id]`
+pairs (at most 64, including the primary pair), each checked against the existing
+engine policy. No wildcard or automatic whole-policy grant is accepted. The HA
+adapter sends registry-correlated `origin` device/satellite/area metadata. The
+bridge rejects unknown pairs and mismatched policy areas. Multi-device endpoints
+require origin; only a single-principal endpoint accepts legacy starts without it.
+The credential authenticates HA, not independent satellite hardware. Keep it scoped
+to the intended HA entry. The complete engine policy is reused, never published.
 
 ## Wire and failure semantics
 
@@ -99,16 +102,23 @@ policy parity. The engine's full policy is reused, never republished or replaced
 python -m unittest discover -s companion/tests -v
 ```
 
-The 10 protocol tests use real verified loopback TLS and the actual HA client
-source. Four additional tests require `HERMES_NATIVE_TEST_PLUGIN` (a separately
+The 12 protocol tests use real verified loopback TLS and the actual HA client
+source. Eight additional tests require `HERMES_NATIVE_TEST_PLUGIN` (a separately
 installed native plugin directory), `HERMES_NATIVE_TEST_PROFILE` (its genuine
 profile name) and the dependency's runtime on `PYTHONPATH`. They use the real
 installed loader, factory, Engine, Host, PluginContext, SessionDB, MemoryManager
 and Mnemosyne provider in a disposable named profile home. Only provider and MCP
 **network** boundaries are synthetic; production home/config/policy is not used.
-They verify two-turn history, memory identity/isolation, wrong profile, catalog
-acknowledgement before PCM, and cancellation during missing final acknowledgement.
+They verify physical-origin and two-device history isolation, same-device follow-up,
+normal session/memory ownership under a foreign outer profile, wrong profile,
+catalog acknowledgement before PCM, and cancellation during missing final
+acknowledgement or an uncertain dispatched effect. For the installed-wheel CLI
+test also set `HERMES_NATIVE_PACKAGED_PYTHON` to an isolated wheel interpreter and
+`HERMES_NATIVE_TEST_PATHS` to the owning runtime's dependency paths. It executes
+packaged main, real plugin discovery/factory, TLS, a synthetic-provider Engine turn,
+and graceful shutdown. Dependency-specific tests skip when not configured.
 
 See [qualification](../docs/native-audio-qualification.md) for executed versions,
-HA 2026.11 fixture compatibility, storage mismatch and all remaining gates.
+HA 2026.11 fixture compatibility, the verified separate session/memory storage
+contract, and all remaining live/public-distribution gates.
 No real provider/cloud, microphone, playback or physical device test is implied.
