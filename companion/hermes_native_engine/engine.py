@@ -56,7 +56,7 @@ class Sessions:
         for row in rows:
             md = row.get("display_metadata") or {}
             if md.get("kind") == "same_model_semantic_derivative":
-                result.append({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "[Prior audio semantic summary, NOT verbatim transcription] " + row["content"]}]})
+                continue  # Historical generated summaries are not user speech.
             elif row["role"] == "assistant" and row.get("content") and not row.get("tool_calls"):
                 result.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": row["content"]}]})
             # Tool rows are actual executed context; restoring as quoted facts avoids orphaned
@@ -80,10 +80,9 @@ explicitly qualified music tool is in the catalog; do not substitute arbitrary H
 services or invented tracks. Greetings/clarifications need no household tools,
 but still complete with finish_turn.
 Complete the turn by calling finish_turn, never by emitting JSON in message text.
-Use answer for spoken text, input_summary for a faithful short semantic summary
-of this received audio (NOT a verbatim transcript), and followup true only for an
-explicit clarification. This derivative is for session display/context only;
-you remain the sole audio-deciding model. Call finish_turn alone, without other
+Use answer for spoken text and followup true only for an explicit clarification.
+Never summarize or paraphrase the user's audio as a user message or transcript.
+You remain the sole audio-deciding model. Call finish_turn alone, without other
 tools or commentary in its response. It has no household effect.
 """
 
@@ -160,8 +159,7 @@ class NativeLoop:
                             await self._create_item(ws, item)
                             db.append_message(sid, 'tool', tool_name=name, tool_call_id=cid, content=result,
                                 display_metadata={'turn_id': turn_id, 'local_completion': True})
-                            db.append_message(sid, "user", args["input_summary"], display_kind="native_audio_semantic_summary",
-                                display_metadata={"kind": "same_model_semantic_derivative", "turn_id": turn_id, "not_transcript": True, "deciding_model": MODEL})
+
                             db.append_message(sid, "assistant", args["answer"], display_metadata={"turn_id": turn_id, "followup": args["followup"]})
                             return args
                         try:
@@ -217,8 +215,8 @@ class NativeLoop:
         final = json.loads(text, object_pairs_hook=unique, parse_constant=nonfinite)
         if not Draft202012Validator(FINISH_TOOL['parameters']).is_valid(final):
             raise ValueError('terminal argument schema')
-        exact(final, ('answer', 'input_summary', 'followup'))
-        plain(final['answer'], 2000); plain(final['input_summary'], 1000)
+        exact(final, ('answer', 'followup'))
+        plain(final['answer'], 2000)
         if type(final['followup']) is not bool: raise ValueError('followup')
         return final
 
@@ -409,8 +407,20 @@ class Engine:
                     if frozen:
                         pin = session_row.get("tool_names")
                         if isinstance(pin, str): pin = json.loads(pin)
-                        if pin != caps.catalog(): raise ValueError("session capability catalog changed; new conversation required")
-                        prompt = frozen
+                        if pin != caps.catalog():
+                            # Admit only removal of the obsolete terminal-summary field.
+                            migrated = copy.deepcopy(pin)
+                            for tool in migrated or []:
+                                if tool.get('name') == 'finish_turn':
+                                    params = tool.get('parameters', {})
+                                    params.get('properties', {}).pop('input_summary', None)
+                                    params['required'] = [k for k in params.get('required', []) if k != 'input_summary']
+                            if migrated != caps.catalog():
+                                raise ValueError("session capability catalog changed; new conversation required")
+                            self.db.update_system_prompt(sid, prompt)
+                            self.db.update_session_tool_names(sid, caps.catalog())
+                        else:
+                            prompt = frozen
                     else:
                         self.db.update_system_prompt(sid, prompt)
                         self.db.update_session_tool_names(sid, caps.catalog())
@@ -418,9 +428,7 @@ class Engine:
                     memory.on_turn_start(len(history) + 1, "[Original native audio received; untranscribed]", session_id=sid)
                 async with self.connect() as ws:
                     final = await NativeLoop().run(ws, pcm, prompt, caps, history, self.db, sid, ids["turn_id"])
-                # Existing profile sync policy is respected. Derivative is explicitly marked.
-                with self.host.scope_home():
-                    memory.sync_all("[Same-model semantic derivative, not transcript] " + final["input_summary"], final["answer"], session_id=sid)
+                # No automatic memory extraction from invented user text.
                 count, at = self.followups.get(key, (0, 0))
                 if time.monotonic() - at > 30: count = 0
                 allowed = final["followup"] and count < 2

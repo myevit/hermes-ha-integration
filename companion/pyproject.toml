@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-ha-native-companion"
-version = "0.2.0"
+version = "0.2.1"
 description = "Optional authenticated PCM peer for Hermes Home Assistant"
 requires-python = ">=3.11"
 dependencies = ["aiohttp>=3.11,<4"]

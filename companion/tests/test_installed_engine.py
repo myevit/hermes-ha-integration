@@ -50,7 +50,7 @@ class ProviderWire:
             await self.queue.put({'type': 'response.done', 'response': {'id': rid,
                 'status': 'completed', 'output': [{'type': 'function_call', 'name': 'finish_turn',
                     'call_id': 'call_' + str(self.counter), 'arguments': json.dumps({
-                    'answer': 'Offline answer?', 'input_summary': 'Synthetic PCM qualification', 'followup': True})}]}})
+                    'answer': 'Offline answer?', 'followup': True})}]}})
 
     async def receive_json(self):
         return await self.queue.get()
@@ -173,9 +173,9 @@ class InstalledEngine(unittest.IsolatedAsyncioTestCase):
         sid = rows[0]['id']
         messages = self.engine.db.get_messages(sid)
         self.assertEqual(sum(m.get('display_kind') == 'native_audio' for m in messages), 2)
-        self.assertEqual(sum(m.get('display_kind') == 'native_audio_semantic_summary' for m in messages), 2)
+        self.assertEqual(sum(m.get('display_kind') == 'native_audio_semantic_summary' for m in messages), 0)
         self.assertIn('Offline answer?', json.dumps(second_wire.sent))
-        self.assertIn('Synthetic PCM qualification', json.dumps(second_wire.sent))
+        self.assertNotIn('Synthetic PCM qualification', json.dumps(second_wire.sent))
         self.assertEqual(len(memory_instances), 2)
         self.assertEqual(self.engine.db.get_session(sid)['profile_name'], self.profile)
         # Tell the operator the actual storage implementation, never rename it.

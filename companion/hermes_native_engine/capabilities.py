@@ -12,8 +12,7 @@ from .policy import (ACTIONS, MEMORY_EFFECT, MEMORY_NAMES, MEMORY_READ,
 
 FINISH_TOOL = schema('finish_turn', 'Complete this native audio turn locally. No physical effect. Call alone after all needed bounded tools.',
     {'answer': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
-     'input_summary': {'type': 'string', 'minLength': 1, 'maxLength': 1000},
-     'followup': {'type': 'boolean'}}, ('answer', 'input_summary', 'followup'))
+     'followup': {'type': 'boolean'}}, ('answer', 'followup'))
 FINISH_CHOICE = {'type': 'function', 'name': 'finish_turn'}
 
 
