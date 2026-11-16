@@ -61,7 +61,7 @@ from .const import (
 )
 from .speech import SpeechEmojiFilter, SpeechMarkdownFilter, strip_speech_emoji
 from .silence import SpeechSilenceFilter, is_silence
-from .native import NativeError, TOKEN_PREFIX, audio_content
+from .native import NativeError, TOKEN_PREFIX
 
 try:
     from homeassistant.components.conversation import ChatLog, async_get_chat_log
@@ -450,16 +450,35 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
             or user_input.conversation_id
             or str(uuid.uuid4())
         )
-        user_content = user_input.text
-        native_audio = user_input.text.startswith(TOKEN_PREFIX)
-        if native_audio:
+        if user_input.text.startswith(TOKEN_PREFIX):
             runtime = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
             response = intent.IntentResponse(language=user_input.language)
             try:
                 store = runtime.get("capture_store")
-                if store is None or not self._session_reuse_enabled():
-                    raise NativeError("native_sessions_required")
-                user_content = audio_content(store.take(user_input.text))
+                native = runtime.get("native_client")
+                if store is None or native is None:
+                    raise NativeError("native_disabled")
+                pcm = store.take(user_input.text)
+                device_id = getattr(user_input, "device_id", None)
+                satellite_id = getattr(user_input, "satellite_id", None)
+                origin = None
+                if device_id or satellite_id:
+                    device = dr.async_get(self.hass).async_get(device_id) if device_id else None
+                    satellite = er.async_get(self.hass).async_get(satellite_id) if satellite_id else None
+                    if (not device or not satellite or satellite.device_id != device_id
+                            or not device.area_id):
+                        raise NativeError("native_origin_unavailable")
+                    origin = {"device_id": device_id, "satellite_id": satellite_id,
+                              "area_id": device.area_id}
+                final = await native.exchange(pcm, conv_id, **({"origin": origin} if origin else {}))
+                text = _sanitize_text_for_speech(final.text)
+                silent = is_silence(final.text)
+                if not silent:
+                    response.async_set_speech(text)
+                return self._build_conversation_result(
+                    response, conv_id,
+                    continue_conversation=final.follow_up and not silent,
+                ), False
             except NativeError:
                 response.async_set_error(
                     intent.IntentResponseErrorCode.UNKNOWN,
@@ -471,8 +490,6 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
         follow_up_mode = self._continued_conversation_mode()
         session_reuse = self._session_reuse_enabled()
         session_key = self._build_session_key(user_input, conv_id) if session_reuse else None
-        if native_audio and session_key:
-            session_key += ":native_audio"
         session_id = self._get_active_session_id(session_key) if session_key else None
 
         # Resolve username from HA auth
@@ -504,17 +521,17 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
         )
 
         if session_reuse:
-            messages: list[dict[str, Any]] = []
+            messages: list[dict[str, str]] = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": user_content})
+            messages.append({"role": "user", "content": user_input.text})
         else:
             history = self._history.setdefault(conv_id, [])
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.extend(history)
-            messages.append({"role": "user", "content": user_content})
+            messages.append({"role": "user", "content": user_input.text})
 
         try:
             if chat_log is None:
@@ -582,7 +599,7 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
     async def _stream_chat_log_response(
         self,
         chat_log: ChatLog,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, str]],
         session_id: str | None = None,
         request_state: dict[str, Any] | None = None,
     ) -> str:
@@ -635,7 +652,7 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
 
     async def _iter_voice_safe_response(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, str]],
         session_id: str | None = None,
         request_state: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
@@ -681,7 +698,7 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
 
     async def _get_response(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, str]],
         session_id: str | None = None,
         request_state: dict[str, Any] | None = None,
     ) -> str:

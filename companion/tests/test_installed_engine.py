@@ -107,8 +107,8 @@ class InstalledEngine(unittest.IsolatedAsyncioTestCase):
             discovery.assert_called_once_with(allowed_mcp_names=['homeassistant'])
         import hermes_native_engine
         self.assertIn('site-packages', hermes_native_engine.__file__)
-        import sysconfig
-        installed_root = Path(sysconfig.get_paths()['purelib']).resolve()
+        from importlib.metadata import distribution
+        installed_root = Path(distribution('hermes-ha-native-companion').locate_file('')).resolve()
         for name in ('hermes_native_engine', 'mnemosyne_hermes', 'hermes_native_companion'):
             self.assertTrue(Path(__import__(name).__file__).resolve().is_relative_to(installed_root))
         self.assertFalse({'backend', 'native_home', 'talk_auth', 'talk_wire'} & sys.modules.keys())

@@ -6,7 +6,15 @@ fixture reset symbol disappeared. Replace ONLY that obsolete test-cleanup
 hook with resetting the logger class, and preload HA before HTTPX plugins.
 """
 import logging
+import os
 import sys
+
+# Optional offline engine qualification dependencies. Append, never prepend: the
+# exact HA fixture and its pinned packages remain authoritative. Do not process
+# foreign .pth files (which could redirect Hermes to an experimental core clone).
+for path in os.environ.get("HERMES_NATIVE_TEST_DEPENDENCY_PATHS", "").split(os.pathsep):
+    if path:
+        sys.path.append(path)
 
 import homeassistant
 from homeassistant.components import logger

@@ -4,77 +4,73 @@ import pytest
 from homeassistant.components import stt
 from homeassistant.helpers import entity_registry as er
 from custom_components.hermes_conversation.const import DOMAIN
-from custom_components.hermes_conversation.native import CaptureStore
+from custom_components.hermes_conversation.native import CaptureStore, NativeResult
 from custom_components.hermes_conversation.stt import HermesNativeCapture
 from runtime_tests.test_activity_runtime import _setup, _process
 
 
-async def test_real_native_setup_capture_conversation_unload(hass_ready, hermes_api, tmp_path):
-    import aiohttp
-    from aiohttp import web
-    import base64, io, wave, ssl, ipaddress
-    from datetime import datetime, timedelta, timezone
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
+async def test_real_native_setup_capture_conversation_unload(hass_ready, hermes_api):
     hass = hass_ready
+    hermes_api.native['voice-example'] = hermes_api.root
     entry = await _setup(hass, hermes_api)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
-    now = datetime.now(timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
-        .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(minutes=1))
-        .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), False)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), True).sign(key, hashes.SHA256()))
-    cp, kp = tmp_path / 'cert.pem', tmp_path / 'key.pem'
-    cp.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    kp.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                    serialization.NoEncryption()))
-    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_context.load_cert_chain(cp, kp)
-    tls_site = web.TCPSite(hermes_api._runner, '127.0.0.1', 0, ssl_context=server_context)
-    await tls_site.start()
-    port = tls_site._server.sockets[0].getsockname()[1]
-    trust = ssl.create_default_context(cafile=str(cp))
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=trust)) as session:
-        with patch('custom_components.hermes_conversation.async_get_clientsession', return_value=session):
-            hass.config_entries.async_update_entry(entry,
-                data={**entry.data, 'port': port, 'use_ssl':True, 'verify_ssl':True},
-                options={**entry.options, 'native_audio_enabled':True, 'continued_conversation_mode':'auto'})
-            await hass.async_block_till_done(wait_background_tasks=True)
-            registry = er.async_get(hass)
-            assert registry.async_get_entity_id('stt', DOMAIN, entry.entry_id + '_native_capture')
-            runtime = hass.data[DOMAIN][entry.entry_id]
-            assert 'native_client' not in runtime
-            capture = HermesNativeCapture(entry.entry_id, runtime['capture_store'])
-            metadata = stt.SpeechMetadata(language='en', format=stt.AudioFormats.WAV,
-                codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
-                sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
-                channel=stt.AudioChannels.CHANNEL_MONO)
-            pcm = b'\0\0' * 160
-            async def stream(): yield pcm
-            result = await capture.async_process_audio_stream(metadata, stream())
-            assert result.result == stt.SpeechResultState.SUCCESS
-            before = hermes_api.count_paths('/v1/chat/completions')
-            hermes_api.chat_response = 'Ready?'
-            hermes_api.chat_session_id = 'native-normal-session'
-            response = await _process(hass, entry, result.text)
-            assert response.continue_conversation
-            assert response.response.speech['plain']['speech'] == 'Ready?'
-            payload = hermes_api.chat_requests[-1]
-            assert payload['model'] == 'gpt-realtime-2.1'
-            part = payload['messages'][-1]['content'][0]
-            with wave.open(io.BytesIO(base64.b64decode(part['input_audio']['data']))) as wav:
-                assert wav.readframes(wav.getnframes()) == pcm
-            assert result.text not in str(payload)
-            replay = await _process(hass, entry, result.text)
-            assert replay.response.as_dict()['response_type'] == 'error'
-            assert hermes_api.count_paths('/v1/chat/completions') == before + 1
-            assert await hass.config_entries.async_unload(entry.entry_id)
-            assert entry.entry_id not in hass.data.get(DOMAIN, {})
-    await tls_site.stop()
+    hass.config_entries.async_update_entry(entry, options={
+        'profile': 'voice-example', 'profile_route': 'native',
+        'native_audio_enabled': True,
+        'native_audio_origin': 'https://example.org',
+        'native_audio_key': 'synthetic-test-token-not-real-' + 'x' * 40,
+    })
+    await hass.async_block_till_done(wait_background_tasks=True)
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id('stt', DOMAIN, entry.entry_id + '_native_capture')
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    capture = HermesNativeCapture(entry.entry_id, runtime['capture_store'])
+    metadata = stt.SpeechMetadata(language='en', format=stt.AudioFormats.WAV,
+        codec=stt.AudioCodecs.PCM, bit_rate=stt.AudioBitRates.BITRATE_16,
+        sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
+        channel=stt.AudioChannels.CHANNEL_MONO)
+    async def stream():
+        yield b'\0\0' * 160
+    result = await capture.async_process_audio_stream(metadata, stream())
+    assert result.result == stt.SpeechResultState.SUCCESS
+    before = hermes_api.count_paths('/v1/chat/completions')
+    with patch.object(runtime['native_client'], 'exchange', AsyncMock(return_value=NativeResult('Ready?', True))) as exchange:
+        response = await _process(hass, entry, result.text)
+        assert response.continue_conversation
+        assert response.response.speech['plain']['speech'] == 'Ready?'
+        exchange.assert_awaited_once()
+        replay = await _process(hass, entry, result.text)
+        assert replay.response.as_dict()['response_type'] == 'error'
+    assert hermes_api.count_paths('/v1/chat/completions') == before
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert entry.entry_id not in hass.data.get(DOMAIN, {})
+
+
+async def test_native_error_burns_capture_without_text_retry(hass_ready, hermes_api):
+    from custom_components.hermes_conversation.native import NativeError
+    hass = hass_ready
+    hermes_api.native['voice-example'] = hermes_api.root
+    entry = await _setup(hass, hermes_api)
+    hass.config_entries.async_update_entry(entry, options={
+        'profile': 'voice-example', 'profile_route': 'native', 'native_audio_enabled': True,
+        'native_audio_origin': 'https://example.org', 'native_audio_key': 'x' * 40,
+    })
+    await hass.async_block_till_done(wait_background_tasks=True)
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    token = runtime['capture_store'].put(b'\0\0' * 160)
+    before = len(hermes_api.chat_requests)
+    with patch.object(runtime['native_client'], 'exchange', AsyncMock(side_effect=NativeError('native_exchange_failed'))) as exchange:
+        failed = await _process(hass, entry, token)
+        assert failed.response.as_dict()['response_type'] == 'error'
+        replay = await _process(hass, entry, token)
+        assert replay.response.as_dict()['response_type'] == 'error'
+        exchange.assert_awaited_once()
+    assert len(hermes_api.chat_requests) == before
+    # Explicit text remains a separate supported route, never an automatic replay.
+    result = await _process(hass, entry, 'Synthetic explicit text')
+    assert result.response.speech['plain']['speech'] == 'synthetic response'
+    assert len(hermes_api.chat_requests) == before + 1
+    assert token not in str(hermes_api.chat_requests)
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize('pcm', [b'', b'x', b'x' * (1024 * 1024 + 2)])

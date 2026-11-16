@@ -14,7 +14,7 @@ from .api import HermesApiClient
 from .compat import entry_value, resolve_connection_config
 from .const import DEFAULT_TIMEOUT, DOMAIN, LEGACY_CONF_MODEL, LEGACY_CONF_TIMEOUT
 from .coordinator import HermesDiagnosticsCoordinator
-from .native import CaptureStore
+from .native import CaptureStore, NativeClient
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: tuple[Platform, ...] = (
@@ -29,12 +29,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
 
     connection = resolve_connection_config(entry)
-    if entry_value(entry, "native_audio_enabled", False) and (not connection.use_ssl or not connection.verify_ssl):
-        raise ValueError("Native audio requires the existing API connection to use verified HTTPS")
-    obsolete = {"native_audio_origin", "native_audio_key"}
-    if obsolete.intersection(entry.options):
-        hass.config_entries.async_update_entry(entry, options={
-            k: v for k, v in entry.options.items() if k not in obsolete})
+    # Validate the optional transport before publishing entry state or registering
+    # unload callbacks. A bad native configuration must not leave a partial entry.
+    native = None
+    if entry_value(entry, "native_audio_enabled", False):
+        native = NativeClient(
+            session, entry_value(entry, "native_audio_origin", ""),
+            entry_value(entry, "native_audio_key", ""), connection.profile,
+        )
     client = HermesApiClient(
         session=session,
         host=connection.host,
@@ -62,10 +64,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     platforms = PLATFORMS
-    if entry_value(entry, "native_audio_enabled", False):
+    if native is not None:
         store = CaptureStore()
-        hass.data[DOMAIN][entry.entry_id].update(capture_store=store)
+        hass.data[DOMAIN][entry.entry_id].update(native_client=native, capture_store=store)
         entry.async_on_unload(store.clear)
+        entry.async_on_unload(native.shutdown)
         platforms = (*PLATFORMS, Platform.STT)
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -84,7 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     platforms = PLATFORMS
-    if "capture_store" in hass.data[DOMAIN][entry.entry_id]:
+    if "native_client" in hass.data[DOMAIN][entry.entry_id]:
         platforms = (*PLATFORMS, Platform.STT)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 

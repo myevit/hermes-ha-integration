@@ -15,6 +15,18 @@ from custom_components.hermes_conversation.const import (
 
 
 class InitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bad_native_options_leave_no_partial_entry(self):
+        from custom_components.hermes_conversation.native import NativeError
+        hass = FakeHass()
+        entry = FakeConfigEntry(data={CONF_HOST: 'agent.local', CONF_PORT: 8443}, options={
+            'native_audio_enabled': True, 'native_audio_origin': 'https://example.org',
+            'native_audio_key': 'x' * 40,
+        })
+        with self.assertRaises(NativeError):
+            await integration.async_setup_entry(hass, entry)
+        self.assertNotIn(entry.entry_id, hass.data.get(DOMAIN, {}))
+        self.assertEqual(hass.config_entries.forwarded, [])
+
     async def test_setup_forwards_conversation_platform(self):
         hass = FakeHass()
         entry = FakeConfigEntry(

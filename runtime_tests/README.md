@@ -1,5 +1,10 @@
 # Real Home Assistant runtime harness
 
+For the current **HA 2026.11.1** run, installed native-engine coverage without
+modifying the HA environment, exact commands and activation limits, see
+[native-audio-current.md](../docs/native-audio-current.md). The version table below
+documents earlier harness environments, not the current native-audio receipt.
+
 Black-box tests against actual Home Assistant conversation, entity/device registries,
 state machine, polling, conversation activity events and unload/reload. The fresh
 registry contract checks all four activity names, default and alternate-title entity
