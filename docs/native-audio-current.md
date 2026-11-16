@@ -81,9 +81,9 @@ From the fork root:
 
 | Check | Result |
 | --- | --- |
-| `python -m unittest discover -s tests -q` | **232 passed** |
+| `python -m unittest discover -s tests -q` | **233 passed** |
 | Installed companion/engine suite against official core, below | **37 passed, no skips** |
-| Real HA runtime suite, below | **36 passed, no skips**, 5 warnings |
+| Real HA runtime suite, below | **66 passed, no skips**, 5 warnings |
 | `git diff --check` | Passed |
 
 The HA environment was **2026.11.1**, pytest plugin **0.13.375**. Its socket and

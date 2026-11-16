@@ -477,7 +477,9 @@ class HermesConversationAgent(ConversationEntity, AbstractConversationAgent):
                     response.async_set_speech(text)
                 return self._build_conversation_result(
                     response, conv_id,
-                    continue_conversation=final.follow_up and not silent,
+                    continue_conversation=not silent and self._should_continue_conversation(
+                        self._continued_conversation_mode(), text,
+                    ),
                 ), False
             except NativeError:
                 response.async_set_error(

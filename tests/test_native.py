@@ -7,7 +7,10 @@ from unittest.mock import patch
 from tests.test_support import FakeConfigEntry, FakeConversationInput, FakeHass
 from tests.test_conversation import FakeClient
 from custom_components.hermes_conversation.conversation import HermesConversationAgent
-from custom_components.hermes_conversation.const import DOMAIN
+from custom_components.hermes_conversation.const import (
+    CONF_CONTINUED_CONVERSATION_MODE, DOMAIN,
+    FOLLOW_UP_MODE_ALWAYS, FOLLOW_UP_MODE_AUTO, FOLLOW_UP_MODE_OFF,
+)
 from custom_components.hermes_conversation.native import (
     CaptureStore, MAX_PCM, NativeClient, NativeError, NativeResult, validate_origin,
 )
@@ -139,8 +142,41 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         token = store.put(b'\0\0')
         user = FakeConversationInput(text=token, conversation_id='session')
         result = await agent.async_process(user)
-        self.assertTrue(result.continue_conversation)
+        self.assertFalse(result.continue_conversation)
         result = await agent.async_process(user)
         self.assertFalse(result.continue_conversation)
         self.assertTrue(result.response.error)
         self.assertEqual(text.calls, [])
+
+    async def test_native_follow_up_matches_entry_policy_not_model_flag(self):
+        for mode in (FOLLOW_UP_MODE_OFF, FOLLOW_UP_MODE_ALWAYS, FOLLOW_UP_MODE_AUTO):
+            for model_flag in (False, True):
+                for reply, question, silent in (
+                    ('Ready?', True, False),
+                    ('Done.', False, False),
+                    ('**Ready?**', True, False),
+                    ('Ready? Done.', False, False),
+                    ('NO_REPLY', False, True),
+                ):
+                    with self.subTest(mode=mode, model_flag=model_flag, reply=reply):
+                        hass = FakeHass()
+                        entry = FakeConfigEntry(options={CONF_CONTINUED_CONVERSATION_MODE: mode})
+                        text = FakeClient()
+                        text.next_text = reply
+                        store = CaptureStore()
+                        class Native:
+                            async def exchange(self, pcm, session_id):
+                                return NativeResult(reply, model_flag)
+                        hass.data[DOMAIN] = {entry.entry_id: dict(capture_store=store, native_client=Native())}
+                        agent = HermesConversationAgent(hass, entry, text, session_map={})
+                        result = await agent.async_process(FakeConversationInput(
+                            store.put(b'\0\0'), conversation_id='native'))
+                        expected = not silent and (mode == FOLLOW_UP_MODE_ALWAYS or
+                                                  mode == FOLLOW_UP_MODE_AUTO and question)
+                        self.assertEqual(result.continue_conversation, expected)
+                        self.assertFalse(result.response.error)
+                        self.assertEqual(bool(result.response.speech), not silent)
+                        self.assertEqual(text.calls, [])
+                        ordinary = await agent.async_process(FakeConversationInput(
+                            'Synthetic explicit text', conversation_id='text'))
+                        self.assertEqual(result.continue_conversation, ordinary.continue_conversation)

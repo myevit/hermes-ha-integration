@@ -85,7 +85,8 @@ async def test_companion_entry_capture_tls_history_events(hass_ready, enable_cus
                 CONF_HOST: '127.0.0.1', CONF_PORT: api.port, CONF_API_KEY: API_KEY,
                 CONF_USE_SSL: False, "native_audio_enabled": True,
                 "native_audio_origin": fixture.origin, "native_audio_key": protocol.KEY,
-                CONF_PROFILE: profile, CONF_PROFILE_ROUTE: "native"})
+                CONF_PROFILE: profile, CONF_PROFILE_ROUTE: "native",
+                "continued_conversation_mode": "always"})
             entry.add_to_hass(hass)
             def trusted_client(session, origin, key, expected_profile):
                 # Test CA is injected, never ssl=False and never production trust changes.
