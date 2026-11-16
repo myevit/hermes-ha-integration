@@ -36,6 +36,15 @@ audio. Ignored configuration also degrades to unavailable. An unrequested model
 is disabled before audio; refusal to disable fails closed under existing privacy
 constraints. Unrelated native/provider errors are not suppressed.
 
+The shared receive boundary filters recognition before native response and
+acknowledgement event counters. Discarded deltas and foreign-item recognition do
+not spend the existing 400-event native budgets. Recognition has its own **4,096
+events per turn** flood limit (including discarded events), with cooperative
+cancellation/deadline checkpoints every 64 events even when socket reads are
+immediately ready. Crossing that separate malicious-flood bound fails closed;
+it is not an unlimited promise to drain ASR. The existing eight-terminal buffer,
+text bounds, overall deadline and post-final grace remain unchanged.
+
 The existing event loop consumes recognition without a background reader. After
 a valid native final result, it waits at most **750 ms**, within the existing
 45-second deadline with a 50 ms margin. The recognition record precedes final
@@ -61,8 +70,8 @@ owner approval gate installation, restart and live speech testing. None occurred
 ## Offline results
 
 - Integration unit suite: **233 passed**.
-- Installed 0.2.3 companion on official Hermes 0.23.1: **62 passed, no skips**,
-  including **24 new recognition regressions**.
+- Installed 0.2.3 companion on official Hermes 0.23.1: **70 passed, no skips**,
+  including **32 recognition regressions** (eight added after independent review).
 - Real HA 2026.11.1 runtime: **66 passed, no skips**, five warnings; installed-wheel
   requirement and socket/thread teardown gates remain enabled.
 - Real SessionDB and the actual REST history handler: passed.

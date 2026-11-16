@@ -28,6 +28,8 @@ class RecognitionWire(installed.ProviderWire):
 
     async def send_json(self, event):
         typ = event['type']
+        if self.mode == 'ack_flood' and typ in ('session.update', 'input_audio_buffer.commit', 'conversation.item.create'):
+            for noise in RecognitionBudgets.noise(800): await self.queue.put(noise)
         if typ == 'session.update' and event['session']['audio']['input']['transcription']:
             if self.mode == 'config_error':
                 self.sent.append(copy.deepcopy(event))
@@ -60,6 +62,89 @@ class RecognitionWire(installed.ProviderWire):
                 for entry in self.events: await self.queue.put(entry)
             if self.mode == 'late_socket_error':
                 await self.queue.put({'type': 'session.closed'})
+
+
+class RecognitionBudgets(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def noise(count):
+        return [({'type': 'conversation.item.input_audio_transcription.delta',
+                  'item_id': 'audio_exact', 'delta': 'DISCARDED'} if i % 2 else
+                 recognition('FOREIGN', 'wrong_item')) for i in range(count)]
+
+    async def test_response_final_after_asr_does_not_spend_native_budget(self):
+        for count in (399, 800):
+            with self.subTest(count=count):
+                loop, wire = NativeLoop(), RecognitionWire()
+                await wire.queue.put({'type': 'response.created', 'response': {'id': 'response_exact'}})
+                for event in self.noise(count): await wire.queue.put(event)
+                final = {'type': 'response.done', 'response': {
+                    'id': 'response_exact', 'status': 'completed', 'output': []}}
+                await wire.queue.put(final)
+                self.assertEqual(await loop._response(wire, set()), final)
+                self.assertTrue(wire.queue.empty())
+                self.assertLessEqual(len(loop._early_transcripts), 8)
+                self.assertIsNone(loop._transcript)
+
+    async def test_acknowledgements_after_asr_do_not_spend_native_budget(self):
+        for target in ('session.updated', 'input_audio_buffer.committed', 'item'):
+            for count in (399, 800):
+                with self.subTest(target=target, count=count):
+                    loop, wire = NativeLoop(), RecognitionWire()
+                    for event in self.noise(count): await wire.queue.put(event)
+                    # One native intermediate makes the 399-ASR boundary fail too.
+                    await wire.queue.put({'type': 'rate_limits.updated'})
+                    item = {'id': 'output_exact', 'type': 'function_call_output',
+                            'call_id': 'call_exact', 'output': '{}'}
+                    final = ({'type': 'conversation.item.done', 'item': item}
+                             if target == 'item' else {'type': target})
+                    await wire.queue.put(final)
+                    result = (await loop._wait_item(wire, item) if target == 'item'
+                              else await loop._wait(wire, target))
+                    self.assertEqual(result, final)
+                    self.assertTrue(wire.queue.empty())
+
+    async def test_asr_flood_has_separate_turn_bound(self):
+        loop, wire = NativeLoop(), RecognitionWire()
+        for event in self.noise(loop.TRANSCRIPT_EVENT_LIMIT + 1): await wire.queue.put(event)
+        before = asyncio.all_tasks()
+        with self.assertRaisesRegex(ValueError, 'recognition event budget'):
+            await loop._wait(wire, 'session.updated')
+        self.assertTrue(wire.queue.empty())
+        self.assertLessEqual(len(loop._early_transcripts), 8)
+        self.assertIsNone(loop._transcript)
+        self.assertEqual(asyncio.all_tasks(), before)
+
+    async def test_asr_budget_is_whole_turn_and_accepts_exact_limit(self):
+        loop, wire = NativeLoop(), RecognitionWire()
+        for count in (loop.TRANSCRIPT_EVENT_LIMIT - 1, 1):
+            for event in self.noise(count): await wire.queue.put(event)
+            await wire.queue.put({'type': 'session.updated'})
+            self.assertEqual((await loop._wait(wire, 'session.updated'))['type'], 'session.updated')
+        await wire.queue.put(recognition('FOREIGN', 'wrong_item'))
+        with self.assertRaisesRegex(ValueError, 'recognition event budget'):
+            await loop._wait(wire, 'session.updated')
+
+    async def test_asr_flood_yields_to_existing_deadline_and_cancellation(self):
+        class EndlessWire:
+            async def receive_json(self):
+                return recognition('FOREIGN', 'wrong_item')
+        loop = NativeLoop()
+        before = asyncio.all_tasks()
+        with self.assertRaises(TimeoutError):
+            async with asyncio.timeout(0):
+                await loop._wait(EndlessWire(), 'session.updated')
+        self.assertLess(loop._recognition_events, loop.TRANSCRIPT_EVENT_LIMIT)
+        self.assertEqual(asyncio.all_tasks(), before)
+
+    async def test_native_event_budget_is_unchanged(self):
+        for target in ('response', 'item', 'session.updated'):
+            with self.subTest(target=target):
+                loop, wire = NativeLoop(), RecognitionWire()
+                for _ in range(400): await wire.queue.put({'type': 'rate_limits.updated'})
+                with self.assertRaisesRegex(ValueError, 'event budget'):
+                    if target == 'response': await loop._response(wire, set())
+                    elif target == 'item': await loop._wait_item(wire, {'id': 'output_exact'})
+                    else: await loop._wait(wire, target)
 
 
 class Transcripts(unittest.IsolatedAsyncioTestCase):
@@ -105,6 +190,21 @@ class Transcripts(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(base64.b64encode(raw).decode(), json.dumps(rows))
         from hermes_state import SessionDB
         self.assertIsInstance(self.engine.db, SessionDB)
+
+    async def test_answer_and_record_survive_response_asr_flood(self):
+        wire = RecognitionWire('during_response', RecognitionBudgets.noise(800) + [recognition()])
+        answer, _, rows, records = await self.turn(wire)
+        self.assertEqual(answer, 'Offline answer?')
+        self.assert_record(records)
+        self.assertEqual(rows[-1]['content'], answer)
+        self.assertNotIn(WORDS, json.dumps(wire.sent))
+
+    async def test_answer_and_record_survive_acknowledgement_asr_floods(self):
+        answer, _, rows, records = await self.turn(RecognitionWire('ack_flood'))
+        self.assertEqual(answer, 'Offline answer?')
+        self.assert_record(records)
+        self.assertEqual(rows[-1]['content'], answer)
+        self.assertNotIn(WORDS, json.dumps(self.wire.sent))
 
     async def test_early_exact_item(self):
         self.assert_record((await self.turn(RecognitionWire('early')))[3])

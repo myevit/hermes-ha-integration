@@ -91,6 +91,7 @@ class NativeLoop:
     """Generalized single-model tool loop on a connected realtime websocket."""
     TRANSCRIPTION = {"model": "gpt-4o-transcribe"}
     TRANSCRIPT_GRACE = 0.75  # Within Engine's existing 45s deadline; no background reader.
+    TRANSCRIPT_EVENT_LIMIT = 4096  # Separate whole-turn flood bound, not native protocol budget.
 
     def __init__(self):
         self._input_item = None
@@ -98,6 +99,7 @@ class NativeLoop:
         self._transcript = None
         self._recognition_status = 'unavailable'
         self._recognition_written = False
+        self._recognition_events = 0
         self._config_event = None
         self._deadline = float('inf')
 
@@ -151,7 +153,7 @@ class NativeLoop:
             async with asyncio.timeout(grace):
                 # Same socket, no task survives final/cancel. Count bounds floods.
                 for _ in range(400):
-                    await self._receive(ws)
+                    await self._receive(ws, stop_on_recognition=True)
                     if self._recognition_status != 'pending': return
         except asyncio.CancelledError:
             raise
@@ -411,14 +413,21 @@ class NativeLoop:
                 (item.get('status') == 'completed' or
                  (item.get('type') == 'function_call_output' and 'status' not in item)))
 
-    async def _receive(self, ws) -> dict:
-        event = await ws.receive_json()
+    async def _receive(self, ws, *, stop_on_recognition=False) -> dict:
+        while True:
+            event = await ws.receive_json()
+            if not (type(event) is dict and str(event.get('type')).startswith('conversation.item.input_audio_transcription')):
+                break
+            self._recognition_events += 1
+            if self._recognition_events > self.TRANSCRIPT_EVENT_LIMIT:
+                raise ValueError('recognition event budget')
+            self._recognition_event(event)
+            # Ready socket reads need not yield; preserve turn timeout/cancellation.
+            if self._recognition_events % 64 == 0: await asyncio.sleep(0)
+            if stop_on_recognition: return {'type': 'native.recognition_consumed'}
         if (type(event) is dict and event.get('type') in ('conversation.item.added', 'conversation.item.done', 'conversation.item.created') and
                 self._input_item is not None and event.get('item', {}).get('id') == self._input_item):
             return {'type': 'native.original_item_consumed'}
-        if type(event) is dict and str(event.get('type')).startswith('conversation.item.input_audio_transcription'):
-            self._recognition_event(event)
-            return {'type': 'native.recognition_consumed'}
         if (type(event) is dict and event.get('type') == 'error' and
                 self._config_event is not None and event.get('error', {}).get('event_id') == self._config_event):
             # Optional configuration refusal only: retry configuration once, on
