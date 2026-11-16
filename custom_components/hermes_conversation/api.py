@@ -141,6 +141,14 @@ class HermesApiClient:
         """Most recent X-Hermes-Session-Id observed from the API."""
         return self._last_session_id
 
+    def _request_model(self, messages) -> str:
+        from .native import NATIVE_MODEL
+        if any(isinstance(m.get("content"), list) and any(
+                isinstance(p, dict) and p.get("type") == "input_audio" for p in m["content"])
+                for m in messages):
+            return NATIVE_MODEL
+        return self._model
+
     def _headers(self, session_id: str | None = None) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self._api_key:
@@ -348,13 +356,13 @@ class HermesApiClient:
 
     async def async_send_message(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         session_id: str | None = None,
     ) -> HermesApiResult:
         """Send a non-streaming chat completion request."""
         await self._async_verify_native_profile_route()
         payload = {
-            "model": self._model,
+            "model": self._request_model(messages),
             "messages": messages,
             "stream": False,
         }
@@ -393,13 +401,13 @@ class HermesApiClient:
 
     async def async_stream_message(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         session_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Send a streaming chat completion request. Yields content deltas."""
         await self._async_verify_native_profile_route()
         payload = {
-            "model": self._model,
+            "model": self._request_model(messages),
             "messages": messages,
             "stream": True,
         }

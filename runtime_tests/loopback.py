@@ -113,6 +113,8 @@ class HermesLoopbackApi:
     block_requests: asyncio.Event | None = None
     request_started: asyncio.Event = field(default_factory=asyncio.Event)
     chat_response: str = "synthetic response"
+    chat_requests: list[dict] = field(default_factory=list)
+    chat_session_id: str | None = None
     chat_partial: bool = False
     chat_status: int = 200
     chat_finish_reason: str | None = None
@@ -219,13 +221,17 @@ class HermesLoopbackApi:
         self.request_started.set()
         if remainder in {"/v1/chat/completions", "/v1/chat/completions/"}:
             self.chat_started.set()
+            self.chat_requests.append(await request.json())
             if self.block_chat is not None:
                 await self.block_chat.wait()
             if self.chat_status != 200:
                 return web.json_response({"error": "synthetic failure"}, status=self.chat_status)
             if self.chat_http_body is not None and not (await request.json()).get("stream"):
                 return web.json_response(self.chat_http_body)
-            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            headers = {"Content-Type": "text/event-stream"}
+            if self.chat_session_id:
+                headers["X-Hermes-Session-Id"] = self.chat_session_id
+            response = web.StreamResponse(headers=headers)
             await response.prepare(request)
             delta = json.dumps({"choices": [{"delta": {"content": self.chat_response}}]})
             if self.chat_response:

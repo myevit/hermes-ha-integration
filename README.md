@@ -175,21 +175,20 @@ automation:
           message: Authenticated API connectivity has been off for 2 minutes.
 ```
 
-## Experimental optional native audio
+## Optional native audio
 
-The same config entry can optionally expose a PCM capture STT entity and use a
-separately configured HTTPS native companion; normal text/API mode is unchanged.
-The opt-in options are `native_audio_enabled`, `native_audio_origin`, and
-`native_audio_key`. Use the selected native profile route, not an implicit default.
-HA owns capture, VAD, pipeline/listen lifecycle and TTS. No automatic text retry
-occurs after native failure.
+The same config entry can optionally expose a PCM capture STT entity and send that
+capture to Hermes as native audio on the normal authenticated chat route. Normal
+text/API mode is unchanged; the opt-in option is `native_audio_enabled`, and the
+entry must use **verified HTTPS** and **session reuse**. The capture is sent once,
+as an inline WAV on the existing `/v1/chat/completions` request, and the deciding
+model receives the audio itself. HA owns capture, endpointing, pipeline/listen
+lifecycle and TTS. A capture is single-use: a replayed marker fails instead of
+retrying as text.
 
-The [companion package](companion/README.md) implements the authenticated protocol
-and a genuine installed-engine factory bridge. **It needs a separately installed
-native-engine plugin; Hermes 0.23.1 has no core native-engine SDK.** It is not yet a
-production backend replacement: storage, physical-origin/multi-device policy and
-provider/physical qualification gates remain. See [executed qualification and
-migration gates](docs/native-audio-qualification.md) before enabling anything.
+Native audio needs a Hermes build whose API accepts audio content parts; against a
+build without that support the request fails closed rather than silently falling
+back to a different model.
 
 ## Conversation activity
 

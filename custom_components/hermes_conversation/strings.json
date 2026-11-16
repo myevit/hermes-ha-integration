@@ -74,7 +74,7 @@
   },
   "options": {
     "error": {
-      "invalid_native_configuration": "Native audio needs a verified HTTPS origin and a companion key of at least 40 characters.",
+      "invalid_native_configuration": "Native audio requires verified HTTPS and Hermes server-session reuse.",
       "already_configured": "This Hermes Agent endpoint and profile are already configured.",
       "cannot_connect": "Cannot connect to Hermes Agent. Check host, port, profile route type, and profile.",
       "entry_changed": "This entry changed while the connection was being checked. Review the current values and try again.",
@@ -87,9 +87,7 @@
     "step": {
       "init": {
         "data": {
-          "native_audio_enabled": "Enable experimental native audio capture",
-          "native_audio_origin": "Native companion HTTPS origin",
-          "native_audio_key": "Native companion API key",
+          "native_audio_enabled": "Send native audio through the Hermes API",
           "host": "Host",
           "port": "Port",
           "profile": "Profile",
