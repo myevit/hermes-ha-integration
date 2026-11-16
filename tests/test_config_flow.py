@@ -846,9 +846,11 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PublicationMetadataTests(unittest.TestCase):
-    def test_manifest_is_version_1_4_3(self):
+    def test_manifest_is_distinct_native_fork_release(self):
         manifest = json.loads((COMPONENT_ROOT / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.4.3")
+        self.assertEqual(manifest["version"], "1.4.4-native.1")
+        self.assertEqual(manifest["codeowners"], ["@myevit"])
+        self.assertEqual(manifest["domain"], "hermes_conversation")
 
     def test_strings_and_english_translation_are_equivalent(self):
         strings = json.loads((COMPONENT_ROOT / "strings.json").read_text())
