@@ -50,6 +50,8 @@ class RecognitionWire(installed.ProviderWire):
                 for entry in self.events: await self.queue.put(entry)
             if self.mode == 'interrupt':
                 await self.queue.put({'type': 'error', 'error': {'code': 'synthetic_native_error'}})
+            if self.mode == 'interrupt_after_asr':
+                await self.queue.put({'type': 'error', 'error': {'code': 'synthetic_native_error'}})
             return
         await super().send_json(event)
         if typ == 'response.create' and self.mode == 'during_response':
@@ -151,10 +153,10 @@ class Transcripts(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = installed.InstalledEngine.asyncSetUp
     asyncTearDown = installed.InstalledEngine.asyncTearDown
 
-    async def turn(self, wire=None, turn='turn_one'):
+    async def turn(self, wire=None, turn='turn_one', conversation='conversation'):
         self.wire = wire or RecognitionWire()
         self.engine.connect = self.wire.connect
-        ids = self.real_bridge.ids('conversation', turn)
+        ids = self.real_bridge.ids(conversation, turn)
         answer = await self.engine(installed.PCM, ids)
         sid = self.engine.db.list_recent_sessions_bounded()[0]['id']
         rows = self.engine.db.get_messages(sid)
@@ -165,10 +167,12 @@ class Transcripts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(records), count)
         row = records[-1]
         self.assertEqual(row['display_metadata']['status'], status)
-        self.assertEqual(row['role'], 'system')
+        self.assertEqual(row['role'], 'user' if status == 'available' else 'system')
         self.assertTrue(row['content'])
         self.assertNotIn('input_summary', json.dumps(row))
         self.assertFalse(row['display_metadata']['audio_retained'])
+        self.assertFalse(row['display_metadata']['history_replay'])
+        self.assertTrue(row['display_metadata']['not_guaranteed_verbatim'])
         if status == 'available':
             self.assertEqual(row['content'], 'Speech recognition (may contain errors; not guaranteed verbatim):\n' + WORDS)
         else:
@@ -332,6 +336,34 @@ class Transcripts(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_rest_and_desktop_history_projection(self):
         _, sid, _, records = await self.turn()
+        await self.assert_history_projection(sid, 'success', 'available', WORDS)
+
+    async def test_actual_history_available_after_native_interruption(self):
+        with self.assertRaises(ValueError): await self.turn(RecognitionWire('interrupt_after_asr'))
+        sid = self.engine.db.list_recent_sessions_bounded()[0]['id']
+        await self.assert_history_projection(sid, 'interrupted_available', 'available', WORDS)
+        self.assertNotIn(WORDS, json.dumps(self.engine.sessions.history(sid)))
+
+    async def test_actual_history_machine_branches(self):
+        for mode, status, events in (('normal', 'failed', [recognition(failed=True)]),
+                                     ('config_ignored', 'unavailable', []),
+                                     ('never', 'late', []), ('interrupt', 'interrupted', [])):
+            with self.subTest(status=status), patch.object(NativeLoop, 'TRANSCRIPT_GRACE', 0.01):
+                try:
+                    _, sid, _, _ = await self.turn(RecognitionWire(mode, events), turn=status, conversation=status)
+                except ValueError:
+                    if status != 'interrupted': raise
+                    sid = self.engine.db.list_recent_sessions_bounded()[0]['id']
+                # Each case has its own full session, not selected recognition/final rows.
+                await self.assert_history_projection(sid, status, status, None)
+                self.engine.db.end_session(sid, 'offline_fixture_complete')
+
+    async def test_actual_history_long_non_latin(self):
+        words = 'Пожалуйста, включи спокойную музыку в гостиной. ' * 24 + 'Конец распознавания.'
+        _, sid, _, _ = await self.turn(RecognitionWire(events=[recognition(words)]))
+        await self.assert_history_projection(sid, 'long_non_latin', 'available', words)
+
+    async def assert_history_projection(self, sid, case, status, words):
         # Official gateway imports may normalize sys.path/stdout for their own
         # process. Keep that bootstrap from contaminating later packaged tests.
         import sys
@@ -351,15 +383,35 @@ class Transcripts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         api = json.loads(response.text)['data']
         projected = display_projection(self.engine.db.get_messages_as_conversation(sid, include_row_ids=True), self.home)
+        durable = [r for r in self.engine.db.get_messages(sid) if r.get('display_kind') == 'native_audio_recognition']
+        self.assert_record_metadata(durable[0], status)
         for surface in (api, projected):
             matches = [r for r in surface if r.get('display_kind') == 'native_audio_recognition']
             self.assertEqual(len(matches), 1)
-            self.assertIn(WORDS, matches[0].get('content') or matches[0].get('text') or '')
+            row = matches[0]
+            self.assertEqual(row['role'], 'user' if status == 'available' else 'system')
+            # REST deliberately omits metadata; gateway projection preserves it.
+            if surface is projected: self.assert_record_metadata(row, status)
+            if words is not None:
+                self.assertTrue((row.get('content') or row.get('text')).endswith(words))
+            receipts = [r for r in surface if r.get('display_kind') == 'native_audio']
+            self.assertEqual(len(receipts), 1 if surface is api else 0)
+            if receipts:
+                self.assertFalse(receipts[0].get('content') or receipts[0].get('text'))
+                self.assertLess(surface.index(receipts[0]), surface.index(row))
+            self.assertLess(surface.index(row), len(surface) - 1)
         # Optional private receipt for executing the unmodified Desktop hydration.
         import os
         from pathlib import Path
         if os.environ.get('HERMES_NATIVE_TRANSCRIPT_RECEIPT'):
-            Path(os.environ['HERMES_NATIVE_TRANSCRIPT_RECEIPT']).write_text(json.dumps({'rest': api, 'desktop': projected}))
+            target = Path(os.environ['HERMES_NATIVE_TRANSCRIPT_RECEIPT'])
+            receipt = json.loads(target.read_text()) if target.exists() else {}
+            receipt.update({case + '_rest': api, case + '_desktop': projected})
+            target.write_text(json.dumps(receipt))
+
+    def assert_record_metadata(self, row, status):
+        self.assertEqual(row['display_metadata']['status'], status)
+        self.assertFalse(row['display_metadata']['history_replay'])
 
 
 if __name__ == '__main__':

@@ -1,6 +1,6 @@
 # Native audio: current implementation and offline qualification
 
-The backend-only **0.2.3 recognition-history candidate** is documented in
+The backend-only **0.2.4 recognition-history candidate** is documented in
 [native-transcripts.md](native-transcripts.md). Its transcript behavior and new
 qualification totals supersede the no-transcript limitation below; it is not
 deployed. This page otherwise records the existing native baseline.
@@ -87,7 +87,7 @@ From the fork root:
 | Check | Result |
 | --- | --- |
 | `python -m unittest discover -s tests -q` | **233 passed** |
-| Installed companion/engine suite against official core, below | **37 passed, no skips** |
+| Installed companion/engine suite against official core, below | **73 passed, no skips** |
 | Real HA runtime suite, below | **66 passed, no skips**, 5 warnings |
 | `git diff --check` | Passed |
 
@@ -97,7 +97,7 @@ thread teardown gates remained enabled. The warnings were pytest's pre-imported
 The companion suite also emits expected TLS-handshake diagnostics from deliberately
 rejected certificates; these are negative-test output, not a production incident.
 
-The wheel was built/installed as `hermes-ha-native-companion==0.2.1` in
+The wheel was built/installed as `hermes-ha-native-companion==0.2.4` in
 `.native-qualification`. That environment references `/opt/hermes` and its existing
 site-packages without installing a separate Hermes checkout. It also has the
 package's `[engine]` dependencies and test-only `cryptography`. Its `official-hermes.pth`

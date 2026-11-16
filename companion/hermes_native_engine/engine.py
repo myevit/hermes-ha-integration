@@ -136,7 +136,7 @@ class NativeLoop:
         content = ('Speech recognition (may contain errors; not guaranteed verbatim):\n' + self._transcript
                    if state == 'available' else
                    'Speech recognition unavailable (' + state + '); original audio was the native input. No audio retained.')
-        db.append_message(sid, 'system', content, display_kind='native_audio_recognition',
+        db.append_message(sid, 'user' if state == 'available' else 'system', content, display_kind='native_audio_recognition',
             display_metadata={'turn_id': turn_id, 'kind': 'speech_recognition',
                               'status': state, 'recognition_model': self.TRANSCRIPTION['model'],
                               'input_item_id': self._input_item, 'audio_retained': False,

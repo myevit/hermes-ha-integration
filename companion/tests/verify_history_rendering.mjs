@@ -15,7 +15,13 @@ assert(source && out)
 const actual = {
   './parts': 'lib/chat-messages/parts.ts',
   './tool-parts': 'lib/chat-messages/tool-parts.ts',
-  '@/lib/generated-images': 'lib/generated-images.ts'
+  '@/lib/generated-images': 'lib/generated-images.ts',
+  '@hermes/shared': '../../shared/src/skill-scaffold.ts',
+  '@/components/assistant-ui/reference-kinds': 'components/assistant-ui/reference-kinds.ts',
+  '@/lib/embedded-images': 'lib/embedded-images.ts',
+  '@/lib/error-surface': 'lib/error-surface.ts',
+  '@/lib/todos': 'lib/todos.ts',
+  '@/lib/text': 'lib/text.ts'
 }
 const seams = {
   '@hermes/shared': ['skillInvocationText'],
@@ -34,7 +40,7 @@ await esbuild.build({
   outfile: out, bundle: true, platform: 'node', format: 'esm',
   plugins: [{name: 'text-only-unrelated-ui-seams', setup(build) {
     build.onResolve({filter: /.*/}, args => {
-      if (actual[args.path]) return {path: path.join(source, actual[args.path])}
+      if (actual[args.path]) return {path: path.resolve(source, actual[args.path])}
       if (seams[args.path]) return {path: args.path, namespace: 'unrelated-ui'}
       if (args.kind === 'entry-point') return {path: args.path}
       throw new Error(`Unexpected dependency: ${args.path}`)
@@ -55,14 +61,25 @@ const results = {}
 for (const [surface, rows] of Object.entries(receipt)) {
   const row = rows.find(r => r.display_kind === 'native_audio_recognition')
   assert(row)
-  // Actual persisted recognition row and final ordinary answer, in durable order.
-  const textRows = rows.filter(r => r === row || (r.role === 'assistant' && !r.tool_calls && (r.content || r.text)))
-  const hydrated = toChatMessages(textRows)
-  const recognized = hydrated.filter(r => r.parts.some(p => p.type === 'text' && p.text.includes('Synthetic recognition: blue lantern.')))
-  assert.equal(recognized.length, 1)
-  assert.equal(recognized[0].role, 'system')
-  assert(recognized[0].parts.some(p => p.text?.includes('may contain errors; not guaranteed verbatim')))
-  assert.equal(hydrated.at(-1).role, 'assistant')
+  // Feed ALL actual REST/projection rows, including the contentless audio receipt,
+  // tool calls/results and interruption notice. Pre-filtering hid duplicate turns.
+  const hydrated = toChatMessages(rows)
+  const text = row.content || row.text
+  const available = text.startsWith('Speech recognition (')
+  const recognized = hydrated.filter(r => r.parts.some(p => p.type === 'text' && p.text === text))
+  assert.equal(recognized.length, 1, surface)
+  assert.equal(recognized[0].role, available ? 'user' : 'system', surface)
+  assert.equal(hydrated.filter(r => r.role === 'user').length, available ? 1 : 0,
+    `${surface}: contentless audio receipt must not create another user bubble`)
+  if (available) assert(text.includes('may contain errors; not guaranteed verbatim'))
+  else assert(text.startsWith('Speech recognition unavailable ('))
+  const terminal = hydrated.at(-1)
+  assert.notEqual(terminal, recognized[0])
+  if (surface.startsWith('interrupted')) {
+    assert.equal(terminal.role, 'system')
+    assert(terminal.parts.some(p => p.text?.includes('Native audio turn interrupted')))
+  } else assert.equal(terminal.role, 'assistant')
+  assert(hydrated.indexOf(recognized[0]) < hydrated.indexOf(terminal))
   assert.equal(toChatMessages([{...row, content: null, text: undefined}]).length, 0, 'metadata-only row must be invisible')
   assert.equal(toChatMessages([{...row, display_kind: 'hidden'}]).length, 0)
   results[surface] = hydrated
