@@ -5,7 +5,7 @@ wraps an **already installed, explicitly selected, profile-owned native engine**
 it is not another agent, transcription fallback, provider implementation, or HA
 integration domain. Ordinary text still uses the unchanged upstream API.
 
-## Optional packaged engine (0.2.1)
+## Optional packaged engine (0.2.2)
 
 See [current qualification and activation requirements](../docs/native-audio-current.md)
 for the immutable official-runtime result and the exact private compatibility seam.
@@ -22,7 +22,7 @@ No persona, policy, auth files or bindings are bundled except a clearly fictiona
 Install into an existing supported Hermes runtime (not HA):
 
 ```
-python -m pip install 'hermes_ha_native_companion-0.2.1-py3-none-any.whl[engine]'
+python -m pip install 'hermes_ha_native_companion-0.2.2-py3-none-any.whl[engine]'
 hermes-ha-native-engine-install --home /path/to/hermes/profiles/voice-example
 ```
 

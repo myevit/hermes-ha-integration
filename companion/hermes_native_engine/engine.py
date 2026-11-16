@@ -424,7 +424,6 @@ class Engine:
                     else:
                         self.db.update_system_prompt(sid, prompt)
                         self.db.update_session_tool_names(sid, caps.catalog())
-                        self.db.set_auto_title(sid, "Native audio — " + binding["area_name"], source="derived")
                     memory.on_turn_start(len(history) + 1, "[Original native audio received; untranscribed]", session_id=sid)
                 async with self.connect() as ws:
                     final = await NativeLoop().run(ws, pcm, prompt, caps, history, self.db, sid, ids["turn_id"])

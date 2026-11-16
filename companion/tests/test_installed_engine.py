@@ -220,6 +220,45 @@ class InstalledEngine(unittest.IsolatedAsyncioTestCase):
             await client.exchange(PCM, 'shared_conversation', origin={**first_origin, 'area_id': 'forged'})
         self.assertEqual(self.engine.db.session_count(), 2)
 
+    async def test_same_room_new_conversations_with_populated_legacy_title(self):
+        from hermes_state import SessionDB
+        self.assertIsInstance(self.engine.db, SessionDB)
+        binding = self.engine.policy.bindings[('device', 'assist_satellite.example')]
+        binding['area_name'] = 'Living Room'
+        legacy_ids = self.real_bridge.ids('legacy_conversation', 'legacy_turn')
+        legacy_sid = self.engine.sessions.open(legacy_ids)[0]
+        self.engine.db.append_message(legacy_sid, 'assistant', 'Existing populated conversation')
+        self.engine.db.set_auto_title(legacy_sid, 'Native audio — Living Room', source='derived')
+        legacy_before = self.engine.db.get_session(legacy_sid)
+        legacy_messages = self.engine.db.get_messages(legacy_sid)
+        new_sids = []
+        for conversation in ('new_conversation_one', 'new_conversation_two'):
+            ids = self.real_bridge.ids(conversation, conversation + '_turn')
+            wire = ProviderWire()
+            self.engine.connect = wire.connect
+            result = await self.real_bridge.exchange(PCM, ids)
+            self.assertEqual(result[0], 'Offline answer?')
+            self.assertTrue(any(e['type'] == 'session.update' for e in wire.sent))
+            sid = self.engine.sessions.open(ids)[0]
+            new_sids.append(sid)
+            row = self.engine.db.get_session(sid)
+            self.assertEqual(row['display_name'], 'Native audio — Living Room')
+            self.assertEqual(row['profile_name'], self.profile)
+            self.assertTrue(row['system_prompt'])
+            self.assertTrue(row['tool_names'])
+            origin = json.loads(row['origin_json'])
+            self.assertEqual(origin['session_id'], conversation)
+            self.assertEqual(origin['device_id'], 'device')
+            self.assertEqual(origin['satellite_id'], 'assist_satellite.example')
+            self.assertEqual(origin['area_id'], 'example')
+            messages = self.engine.db.get_messages(sid)
+            self.assertFalse(any(m.get('display_kind') == 'native_audio_semantic_summary' for m in messages))
+            with self.assertRaisesRegex(ValueError, 'replayed'):
+                await self.real_bridge.exchange(PCM, ids)
+        self.assertEqual(len(set([legacy_sid, *new_sids])), 3)
+        self.assertEqual(self.engine.db.get_session(legacy_sid), legacy_before)
+        self.assertEqual(self.engine.db.get_messages(legacy_sid), legacy_messages)
+
     async def test_normal_session_contract_and_foreign_profile_scope(self):
         import hashlib
         default_db = self.home.parent.parent / 'state.db'
