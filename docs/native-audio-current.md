@@ -1,5 +1,10 @@
 # Native audio: current implementation and offline qualification
 
+The backend-only **0.2.3 recognition-history candidate** is documented in
+[native-transcripts.md](native-transcripts.md). Its transcript behavior and new
+qualification totals supersede the no-transcript limitation below; it is not
+deployed. This page otherwise records the existing native baseline.
+
 This document supersedes the transport conclusions in the historical native-audio
 plan, qualification and extraction notes. It describes the candidate, not a
 production deployment or a physically qualified voice pipeline.

@@ -55,8 +55,8 @@ class Sessions:
         result = []
         for row in rows:
             md = row.get("display_metadata") or {}
-            if md.get("kind") == "same_model_semantic_derivative":
-                continue  # Historical generated summaries are not user speech.
+            if md.get("kind") in ("same_model_semantic_derivative", "speech_recognition"):
+                continue  # Neither generated summaries nor recognition are deciding input.
             elif row["role"] == "assistant" and row.get("content") and not row.get("tool_calls"):
                 result.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": row["content"]}]})
             # Tool rows are actual executed context; restoring as quoted facts avoids orphaned
@@ -89,15 +89,104 @@ tools or commentary in its response. It has no household effect.
 
 class NativeLoop:
     """Generalized single-model tool loop on a connected realtime websocket."""
+    TRANSCRIPTION = {"model": "gpt-4o-transcribe"}
+    TRANSCRIPT_GRACE = 0.75  # Within Engine's existing 45s deadline; no background reader.
+
+    def __init__(self):
+        self._input_item = None
+        self._early_transcripts = []
+        self._transcript = None
+        self._recognition_status = 'unavailable'
+        self._recognition_written = False
+        self._config_event = None
+        self._deadline = float('inf')
+
+    def _recognition_event(self, event):
+        # Deltas are deliberately discarded: only the provider's terminal result
+        # for the exact committed original-audio item may become visible words.
+        if event.get('type') not in ('conversation.item.input_audio_transcription.completed',
+                                      'conversation.item.input_audio_transcription.failed'):
+            return
+        if self._input_item is None:
+            if len(self._early_transcripts) < 8:
+                # Keep only bounded recognition fields, never provider error
+                # payloads/logs or foreign content beyond this connection.
+                early = {k: event.get(k) for k in ('type', 'item_id', 'content_index')}
+                text = event.get('transcript')
+                if type(text) is str and len(text) <= 12000: early['transcript'] = text
+                self._early_transcripts.append(early)
+            return
+        if (event.get('item_id') != self._input_item or
+                type(event.get('content_index')) is not int or event['content_index'] != 0):
+            return
+        if self._recognition_status != 'pending': return  # First terminal wins.
+        text = event.get('transcript')
+        if event['type'].endswith('.completed') and type(text) is str and text.strip() and len(text) <= 12000:
+            self._transcript = text
+            self._recognition_status = 'available'
+        else:
+            self._recognition_status = 'failed'
+
+    def persist_recognition(self, db, sid, turn_id, status=None):
+        if self._recognition_written: return
+        state = self._recognition_status
+        if state == 'pending': state = status or 'unavailable'
+        content = ('Speech recognition (may contain errors; not guaranteed verbatim):\n' + self._transcript
+                   if state == 'available' else
+                   'Speech recognition unavailable (' + state + '); original audio was the native input. No audio retained.')
+        db.append_message(sid, 'system', content, display_kind='native_audio_recognition',
+            display_metadata={'turn_id': turn_id, 'kind': 'speech_recognition',
+                              'status': state, 'recognition_model': self.TRANSCRIPTION['model'],
+                              'input_item_id': self._input_item, 'audio_retained': False,
+                              'not_guaranteed_verbatim': True, 'history_replay': False})
+        self._recognition_written = True
+        self._transcript = None
+        self._early_transcripts.clear()
+
+    async def _finish_recognition(self, ws):
+        if self._recognition_status != 'pending': return
+        grace = min(self.TRANSCRIPT_GRACE, max(0, getattr(self, '_deadline', float('inf')) -
+                                               asyncio.get_running_loop().time() - 0.05))
+        try:
+            async with asyncio.timeout(grace):
+                # Same socket, no task survives final/cancel. Count bounds floods.
+                for _ in range(400):
+                    await self._receive(ws)
+                    if self._recognition_status != 'pending': return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Recognition or post-completion socket failure cannot revoke a
+            # completed native answer/effect or trigger another inference.
+            pass
+        if self._recognition_status == 'pending': self._recognition_status = 'late'
+
     async def run(self, ws, pcm, prompt, caps, history, db, sid, turn_id):
-        await ws.send_json({"type": "session.update", "session": {
+        self._config_event = 'asr_config_' + uuid.uuid4().hex
+        update = {"type": "session.update", "event_id": self._config_event, "session": {
             "type": "realtime", "model": MODEL, "output_modalities": ["text"],
             "instructions": prompt, "tools": caps.catalog(), "tool_choice": "auto",
             "audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000},
-                                "turn_detection": None, "transcription": None}}, "max_output_tokens": 1500}})
+                                "turn_detection": None, "transcription": dict(self.TRANSCRIPTION)}}, "max_output_tokens": 1500}}
+        self._fallback_update = copy.deepcopy(update)
+        self._fallback_update.pop('event_id')
+        self._fallback_update['session']['audio']['input']['transcription'] = None
+        await ws.send_json(update)
         accepted = (await self._wait(ws, "session.updated")).get("session", {})
+        self._config_event = None
+        transcription = accepted.get('audio', {}).get('input', {}).get('transcription')
+        if transcription is not None and not (isinstance(transcription, dict) and
+                transcription.get('model') == self.TRANSCRIPTION['model']):
+            # Never send audio to an unrequested recognition model.
+            await ws.send_json(self._fallback_update)
+            accepted = (await self._wait(ws, 'session.updated')).get('session', {})
+            transcription = accepted.get('audio', {}).get('input', {}).get('transcription')
+            if transcription is not None:
+                raise ValueError('provider refused to disable unrequested recognition model')
+        self._recognition_status = ('pending' if isinstance(transcription, dict) and
+                                    transcription.get('model') == self.TRANSCRIPTION['model'] else 'unavailable')
         audio_input = accepted.get("audio", {}).get("input", {})
-        if accepted.get("model") != MODEL or accepted.get("output_modalities") != ["text"] or accepted.get("tools") != caps.catalog() or accepted.get("tool_choice") != "auto" or audio_input.get("format") != {"type": "audio/pcm", "rate": 24000} or audio_input.get("turn_detection") is not None or audio_input.get("transcription") is not None:
+        if accepted.get("model") != MODEL or accepted.get("output_modalities") != ["text"] or accepted.get("tools") != caps.catalog() or accepted.get("tool_choice") != "auto" or audio_input.get("format") != {"type": "audio/pcm", "rate": 24000} or audio_input.get("turn_detection") is not None:
             raise ValueError("provider did not accept exact native capability/privacy constraints")
         self._acknowledged_items = set()
         self._acknowledged_calls = set()
@@ -109,7 +198,14 @@ class NativeLoop:
             await ws.send_json({"type": "input_audio_buffer.append", "audio": encoded[start:start+32000]})
         del encoded
         await ws.send_json({"type": "input_audio_buffer.commit"})
-        await self._wait(ws, "input_audio_buffer.committed")
+        committed = await self._wait(ws, "input_audio_buffer.committed")
+        iid = committed.get('item_id')
+        if isinstance(iid, str) and ID.fullmatch(iid):
+            self._input_item = iid
+            for event in self._early_transcripts: self._recognition_event(event)
+        else:
+            self._recognition_status = 'unavailable'
+        self._early_transcripts.clear()
         calls_seen, response_ids, total = set(), set(), 0
         recovering = False
         try:
@@ -160,6 +256,8 @@ class NativeLoop:
                             db.append_message(sid, 'tool', tool_name=name, tool_call_id=cid, content=result,
                                 display_metadata={'turn_id': turn_id, 'local_completion': True})
 
+                            await self._finish_recognition(ws)
+                            self.persist_recognition(db, sid, turn_id)
                             db.append_message(sid, "assistant", args["answer"], display_metadata={"turn_id": turn_id, "followup": args["followup"]})
                             return args
                         try:
@@ -220,7 +318,7 @@ class NativeLoop:
         if type(final['followup']) is not bool: raise ValueError('followup')
         return final
 
-    async def _response(self, ws, seen):
+    async def _response(self, ws, seen) -> dict:
         active = None
         completed_items, completed_text, call_stream_seen = {}, {}, False
         completed_arguments = {}
@@ -237,8 +335,8 @@ class NativeLoop:
                     if not isinstance(iid, str) or iid in completed_arguments:
                         raise ValueError('provider argument identity')
                     completed_arguments[iid] = event
-            if typ in ("response.output_audio.delta", "response.audio.delta") or str(typ).startswith("conversation.item.input_audio_transcription"):
-                raise ValueError("unexpected audio output/transcription")
+            if typ in ("response.output_audio.delta", "response.audio.delta"):
+                raise ValueError("unexpected audio output")
             if typ == "response.created":
                 rid = event.get("response", {}).get("id")
                 if active is not None or not isinstance(rid, str) or not ID.fullmatch(rid) or rid in seen:
@@ -313,9 +411,22 @@ class NativeLoop:
                 (item.get('status') == 'completed' or
                  (item.get('type') == 'function_call_output' and 'status' not in item)))
 
-    async def _receive(self, ws):
+    async def _receive(self, ws) -> dict:
         event = await ws.receive_json()
-        if type(event) is not dict or event.get('type') in ('error', 'session.closed', 'response.output_audio.delta', 'response.audio.delta') or str(event.get('type')).startswith('conversation.item.input_audio_transcription'):
+        if (type(event) is dict and event.get('type') in ('conversation.item.added', 'conversation.item.done', 'conversation.item.created') and
+                self._input_item is not None and event.get('item', {}).get('id') == self._input_item):
+            return {'type': 'native.original_item_consumed'}
+        if type(event) is dict and str(event.get('type')).startswith('conversation.item.input_audio_transcription'):
+            self._recognition_event(event)
+            return {'type': 'native.recognition_consumed'}
+        if (type(event) is dict and event.get('type') == 'error' and
+                self._config_event is not None and event.get('error', {}).get('event_id') == self._config_event):
+            # Optional configuration refusal only: retry configuration once, on
+            # the same connection, before sending audio. Never retry inference.
+            self._config_event = None
+            await ws.send_json(self._fallback_update)
+            return {'type': 'native.recognition_unavailable'}
+        if type(event) is not dict or event.get('type') in ('error', 'session.closed', 'response.output_audio.delta', 'response.audio.delta'):
             raise ValueError('provider event refused native constraints')
         if (event.get('type') in ('conversation.item.done', 'conversation.item.created') and
                 (event.get('item', {}).get('id') in getattr(self, '_acknowledged_items', set()) or
@@ -354,11 +465,11 @@ class NativeLoop:
                 return event
         raise ValueError('item acknowledgement event budget')
 
-    async def _wait(self, ws, wanted):
+    async def _wait(self, ws, wanted) -> dict:
         for _ in range(400):
             event = await self._receive(ws)
             if type(event) is not dict: raise ValueError("provider event")
-            if event.get("type") in ("error", "session.closed", "response.output_audio.delta", "response.audio.delta") or str(event.get("type")).startswith("conversation.item.input_audio_transcription"):
+            if event.get("type") in ("error", "session.closed", "response.output_audio.delta", "response.audio.delta"):
                 raise ValueError("provider refused native constraints")
             if event.get("type") == wanted: return event
         raise ValueError("provider event budget")
@@ -392,11 +503,13 @@ class Engine:
         if replay in self.replays: raise ValueError("replayed admission")
         if len(self.replays) >= 2048: raise ValueError("admission budget")
         self.replays[replay] = now
-        async with self.lock, asyncio.timeout(45):
+        async with self.lock, asyncio.timeout(45) as turn_timeout:
             sid, key, binding = self.sessions.open(ids)
             history = self.sessions.history(sid)
             self.sessions.received(sid, ids, pcm)
             memory = None
+            loop = NativeLoop()
+            loop._deadline = turn_timeout.when() or float('inf')
             try:
                 memory = self.memory_factory(sid, key)
                 with self.host.scope_home():
@@ -426,7 +539,7 @@ class Engine:
                         self.db.update_session_tool_names(sid, caps.catalog())
                     memory.on_turn_start(len(history) + 1, "[Original native audio received; untranscribed]", session_id=sid)
                 async with self.connect() as ws:
-                    final = await NativeLoop().run(ws, pcm, prompt, caps, history, self.db, sid, ids["turn_id"])
+                    final = await loop.run(ws, pcm, prompt, caps, history, self.db, sid, ids["turn_id"])
                 # No automatic memory extraction from invented user text.
                 count, at = self.followups.get(key, (0, 0))
                 if time.monotonic() - at > 30: count = 0
@@ -436,7 +549,9 @@ class Engine:
                 self.last_followup[replay] = allowed
                 while len(self.last_followup) > 16: self.last_followup.pop(next(iter(self.last_followup)))
                 return final["answer"]
-            except BaseException:
+            except BaseException as exc:
+                loop.persist_recognition(self.db, sid, ids['turn_id'],
+                    'cancelled' if isinstance(exc, asyncio.CancelledError) else 'interrupted')
                 self.db.append_message(sid, "system", "Native audio turn interrupted; no audio retained. Effects may be uncertain; do not automatically replay.", display_metadata={"turn_id": ids["turn_id"], "status": "interrupted"})
                 raise
             finally:
